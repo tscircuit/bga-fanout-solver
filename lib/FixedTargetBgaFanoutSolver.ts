@@ -4,7 +4,7 @@ import {
   definePipelineStep,
   type PipelineStep,
 } from "@tscircuit/solver-utils"
-import type { GraphicsObject } from "graphics-debug"
+import { mergeGraphics, type GraphicsObject } from "graphics-debug"
 import { buildFanoutModel } from "./model/buildFanoutModel"
 import type {
   FanoutModel,
@@ -23,6 +23,7 @@ const COMPATIBILITY_ROUTE = "compatibilityRoute"
 
 export class FixedTargetBgaFanoutSolver extends BasePipelineSolver<SimpleRouteJson> {
   private fanoutModel: FanoutModel | null = null
+  private readonly inputVisualization: GraphicsObject
   private setupError: unknown | null = null
 
   override pipelineDef: PipelineStep<any>[] = [
@@ -52,6 +53,7 @@ export class FixedTargetBgaFanoutSolver extends BasePipelineSolver<SimpleRouteJs
 
   constructor(input: SimpleRouteJson) {
     super(structuredClone(input))
+    this.inputVisualization = visualizeInput(this.inputProblem)
   }
 
   override _setup() {
@@ -97,8 +99,16 @@ export class FixedTargetBgaFanoutSolver extends BasePipelineSolver<SimpleRouteJs
     )
   }
 
-  override initialVisualize(): GraphicsObject {
-    return visualizeInput(this.inputProblem)
+  override initialVisualize(): null {
+    return null
+  }
+
+  override visualize(): GraphicsObject {
+    return mergeGraphics(this.inputVisualization, super.visualize())
+  }
+
+  override preview(): GraphicsObject {
+    return this.visualize()
   }
 
   override finalVisualize(): GraphicsObject | null {
