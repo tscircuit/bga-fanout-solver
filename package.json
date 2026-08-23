@@ -15,7 +15,7 @@
   "scripts": {
     "start": "cosmos",
     "build": "bunx tsc --noEmit",
-    "build:site": "cosmos-export",
+    "build:site": "cosmos-export && bun scripts/validate-cosmos-export.ts",
     "format": "biome format --write .",
     "format:check": "biome format .",
     "test": "bun test",
