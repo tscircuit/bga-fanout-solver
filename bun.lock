@@ -3,7 +3,7 @@
   "configVersion": 1,
   "workspaces": {
     "": {
-      "name": "@tscircuit/fixed-target-bga-fanout-solver",
+      "name": "@tscircuit/bga-fanout-solver",
       "dependencies": {
         "@tscircuit/core": "0.0.1736",
         "@tscircuit/solver-utils": "0.0.19",

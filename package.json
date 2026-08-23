@@ -1,5 +1,5 @@
 {
-  "name": "@tscircuit/fixed-target-bga-fanout-solver",
+  "name": "@tscircuit/bga-fanout-solver",
   "version": "0.0.1",
   "description": "Incremental fixed-target BGA breakout fanout solver for SimpleRouteJson",
   "private": true,

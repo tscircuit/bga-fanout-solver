@@ -1,4 +1,4 @@
-# @tscircuit/fixed-target-bga-fanout-solver
+# @tscircuit/bga-fanout-solver
 
 An incremental `SimpleRouteJson` solver for routing one rectangular-lattice BGA
 from top-layer pads to already-selected breakout targets on prescribed layers.
@@ -25,7 +25,7 @@ whole-board routing are not claimed.
 ## Usage
 
 ```ts
-import { FixedTargetBgaFanoutSolver } from "@tscircuit/fixed-target-bga-fanout-solver"
+import { FixedTargetBgaFanoutSolver } from "@tscircuit/bga-fanout-solver"
 
 const solver = new FixedTargetBgaFanoutSolver(simpleRouteJson)
 solver.solve()
@@ -62,8 +62,8 @@ bun test --timeout 9999999
 bun run build:site
 ```
 
-The repository is private and local during extraction. It has no publishing
-workflow or runtime network integration.
+The package remains private and unpublished during extraction. The repository
+has no npm publishing workflow or runtime network integration.
 
 The committed SRJs are solver inputs, not Circuit JSON compilation products.
 Their source artifacts, deterministic transforms, hashes, and normalized parity
