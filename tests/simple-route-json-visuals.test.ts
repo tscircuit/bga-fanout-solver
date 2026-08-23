@@ -1,11 +1,10 @@
 import { expect, test } from "bun:test"
+import path from "node:path"
 import type { SimpleRouteJson } from "@tscircuit/core"
 import ramFixture from "../fixtures/simplified-am62l-ddr-ram-repro.srj.json"
 import socFixture from "../fixtures/simplified-am62l-ddr-soc-repro.srj.json"
 import {
-  LOCAL_BREAKOUT_TARGET_LABEL,
   LOCAL_CONNECTION_GUIDE_LABEL,
-  VIRTUAL_EXIT_GUIDE_LABEL,
   visualizeSimpleRouteJson,
 } from "../lib/visualize/simpleRouteJsonVisuals"
 
@@ -23,74 +22,81 @@ const pointIsInsideBounds = (
   point.y >= bounds.minY &&
   point.y <= bounds.maxY
 
-test("raw AM62L visuals distinguish local targets from virtual exit guides", () => {
-  for (const fixture of [socFixture, ramFixture]) {
+const fixtureCases = [
+  {
+    fixture: socFixture,
+    path: path.resolve(
+      import.meta.dir,
+      "../fixtures/simplified-am62l-ddr-soc-repro.srj.json",
+    ),
+    sha256: "4ea12abe2d3f55ddc62e3d54ef48a810aa38fefb2dad7d9bc889036111afda2e",
+  },
+  {
+    fixture: ramFixture,
+    path: path.resolve(
+      import.meta.dir,
+      "../fixtures/simplified-am62l-ddr-ram-repro.srj.json",
+    ),
+    sha256: "064b160282d79571e524b92883994a0be78da814d2e2ea40391cd6deff45131f",
+  },
+] as const
+
+test("raw AM62L visuals show only local breakout connection intent", async () => {
+  for (const fixtureCase of fixtureCases) {
+    const bytes = await Bun.file(fixtureCase.path).arrayBuffer()
+    const sha256 = new Bun.CryptoHasher("sha256")
+      .update(new Uint8Array(bytes))
+      .digest("hex")
+    expect(sha256).toBe(fixtureCase.sha256)
+
+    const fixture = fixtureCase.fixture
     const input = fixture as unknown as SimpleRouteJson
     const visuals = visualizeSimpleRouteJson(input)
     const localGuides =
       visuals.lines?.filter((line) =>
         line.label?.startsWith(LOCAL_CONNECTION_GUIDE_LABEL),
       ) ?? []
-    const virtualGuideSegments =
-      visuals.lines?.filter(
-        (line) =>
-          line.label?.startsWith(VIRTUAL_EXIT_GUIDE_LABEL) &&
-          line.label.includes("local boundary to opposite breakout boundary"),
-      ) ?? []
-    const virtualGuideMarkers =
-      visuals.lines?.filter(
-        (line) =>
-          line.label?.startsWith(VIRTUAL_EXIT_GUIDE_LABEL) &&
-          line.label.endsWith("marker"),
-      ) ?? []
-    const exitTargetByConnectionName = new Map(
-      (input.buses ?? []).flatMap((bus) =>
-        Object.entries(bus.connectionExitTargets ?? {}),
-      ),
+    const allLabels = [
+      ...(visuals.points ?? []),
+      ...(visuals.lines ?? []),
+      ...(visuals.circles ?? []),
+      ...(visuals.rects ?? []),
+      ...(visuals.polygons ?? []),
+    ].flatMap((primitive) => primitive.label ?? [])
+    const exitTargets = (input.buses ?? []).flatMap((bus) =>
+      Object.values(bus.connectionExitTargets ?? {}),
     )
 
     expect(localGuides).toHaveLength(33)
-    expect(virtualGuideSegments).toHaveLength(33)
-    expect(virtualGuideMarkers).toHaveLength(66)
+    expect(visuals.points).toHaveLength(66)
     expect(
-      visuals.points?.filter((point) =>
-        point.label?.startsWith(LOCAL_BREAKOUT_TARGET_LABEL),
-      ),
-    ).toHaveLength(33)
-    expect(
-      visuals.points?.some((point) =>
-        point.label?.startsWith(VIRTUAL_EXIT_GUIDE_LABEL),
+      allLabels.some((label) =>
+        /virtual|exit guide|opposite breakout/i.test(label),
       ),
     ).toBeFalse()
 
     for (const connection of input.connections) {
       const source = connection.pointsToConnect[0]!
       const localTarget = connection.pointsToConnect[1]!
-      const exitTarget = exitTargetByConnectionName.get(connection.name)!
       const localGuide = localGuides.find((line) =>
         line.label?.endsWith(connection.name),
-      )!
-      const virtualGuide = virtualGuideSegments.find((line) =>
-        line.label?.includes(`\n${connection.name}\n`),
       )!
 
       expect(localGuide.points).toEqual([source, localTarget])
       expect(
-        pointIsInsideBounds(localGuide.points[1]!, input.bounds),
+        localGuide.points.every((point) =>
+          pointIsInsideBounds(point, input.bounds),
+        ),
       ).toBeTrue()
-      expect(virtualGuide.points).toEqual([localTarget, exitTarget])
+    }
+
+    for (const exitTarget of exitTargets) {
       expect(
-        pointIsInsideBounds(virtualGuide.points[0]!, input.bounds),
-      ).toBeTrue()
-      expect(
-        pointIsInsideBounds(virtualGuide.points[1]!, input.bounds),
+        visuals.points?.some((point) => samePoint(point, exitTarget)),
       ).toBeFalse()
       expect(
-        visuals.lines?.some(
-          (line) =>
-            line.points.length === 2 &&
-            samePoint(line.points[0]!, source) &&
-            samePoint(line.points[1]!, exitTarget),
+        visuals.lines?.some((line) =>
+          line.points.some((point) => samePoint(point, exitTarget)),
         ),
       ).toBeFalse()
     }
