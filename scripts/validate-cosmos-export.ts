@@ -7,6 +7,7 @@ type CosmosFixtureManifest = {
 
 const exportDirectory = path.resolve(import.meta.dir, "../cosmos-export")
 const expectedFixtureFiles = [
+  "pages/full-am62l-soc-failing-repro.page.tsx",
   "pages/ram-bga.page.tsx",
   "pages/soc-bga.page.tsx",
 ]
@@ -69,7 +70,7 @@ const manifest = (await Bun.file(manifestPath).json()) as CosmosFixtureManifest
 const fixtureFiles = manifest.fixtures.map((fixture) => fixture.filePath).sort()
 if (JSON.stringify(fixtureFiles) !== JSON.stringify(expectedFixtureFiles)) {
   throw new Error(
-    `Expected exactly the SoC and RAM fixtures, found ${fixtureFiles.join(", ")}`,
+    `Expected exactly the two passing BGA fixtures and the full-SoC failing repro, found ${fixtureFiles.join(", ")}`,
   )
 }
 

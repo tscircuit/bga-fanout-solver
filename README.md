@@ -6,9 +6,16 @@ It produces pad dogbones, through vias, and straight/45-degree routes ending at
 the exact supplied targets.
 
 The package intentionally does not choose breakout points and does not route
-the channel between components. Its two debugger fixtures independently solve
-the AM62L SoC BGA and LPDDR4 RAM BGA fanouts using fixed targets captured from
-the validated circuit.
+the channel between components. Two debugger fixtures independently solve the
+AM62L SoC BGA and LPDDR4 RAM BGA fanouts using fixed targets captured from the
+validated circuit.
+
+A third debugger fixture, `Full AM62L SoC — failing repro`, is deliberately
+not a success example. It preserves the simplified computer's complete SoC pin
+intent on the validated 373-ball land geometry, preloads the released TI ground
+escape, and reproduces the current power-first width failure. Its plane and
+local-rail data use a fixture-only contract; they do not expand the package's
+stable fixed-target API.
 
 ## Supported problem shape
 
@@ -67,5 +74,7 @@ has no npm publishing workflow or runtime network integration.
 
 The committed SRJs are solver inputs, not Circuit JSON compilation products.
 Their source artifacts, deterministic transforms, hashes, and normalized parity
-goldens are recorded in `fixtures/provenance.json`. Coordinates are consumed at
-the unchanged solver's established 1e-6 mm canonical precision.
+goldens are recorded in `fixtures/provenance.json`. The full-SoC problem carries
+its own typed terminal inventory and provenance alongside its embedded SRJ.
+Coordinates are consumed at the unchanged solver's established 1e-6 mm
+canonical precision.

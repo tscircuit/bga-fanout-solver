@@ -49,5 +49,18 @@
       "connections": 33,
       "obstacles": 200
     }
-  ]
+  ],
+  "knownFailureFixture": {
+    "file": "full-am62l-soc-failing-repro.problem.json",
+    "bytes": 730315,
+    "sha256": "32a1044a326cd78014bfd13f2e0336441f23889f788aaec05fe05e93cb08b4e9",
+    "status": "known_failure",
+    "strategy": "power_first",
+    "connectedBalls": 211,
+    "fixedTargetConnections": 33,
+    "precommittedGroundVias": 35,
+    "precommittedGroundSegments": 229,
+    "expectedFailurePhase": "build_residual_via_lines",
+    "shortByMillimeters": 1.6064
+  }
 }
