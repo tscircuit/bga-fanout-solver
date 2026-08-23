@@ -3,6 +3,7 @@
   "version": "0.0.1",
   "description": "Incremental fixed-target BGA breakout fanout solver for SimpleRouteJson",
   "private": true,
+  "packageManager": "bun@1.3.14",
   "type": "module",
   "module": "lib/index.ts",
   "files": ["lib"],
