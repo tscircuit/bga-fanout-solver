@@ -5,6 +5,7 @@ import {
   type PipelineStep,
 } from "@tscircuit/solver-utils"
 import type { GraphicsObject } from "graphics-debug"
+import { buildFanoutModel } from "./model/buildFanoutModel"
 import type {
   FanoutModel,
   FixedTargetBgaFanoutOutput,
@@ -12,29 +13,23 @@ import type {
   RankedFanoutModel,
 } from "./model/types"
 import { CompatibilityRouteSolver } from "./private/CompatibilityRouteSolver"
-import { BuildFanoutModelSolver } from "./stages/BuildFanoutModelSolver"
 import { FindFreeSpaceSolver } from "./stages/FindFreeSpaceSolver"
 import { RankFanoutNetsSolver } from "./stages/RankFanoutNetsSolver"
 import { visualizeInput } from "./visualize/inputVisuals"
 
-const BUILD_MODEL = "buildFanoutModel"
 const FIND_FREE_SPACE = "findFreeSpace"
 const RANK_NETS = "rankFanoutNets"
 const COMPATIBILITY_ROUTE = "compatibilityRoute"
 
 export class FixedTargetBgaFanoutSolver extends BasePipelineSolver<SimpleRouteJson> {
+  private fanoutModel: FanoutModel | null = null
+  private setupError: unknown | null = null
+
   override pipelineDef: PipelineStep<any>[] = [
-    definePipelineStep(
-      BUILD_MODEL,
-      BuildFanoutModelSolver,
-      (solver: FixedTargetBgaFanoutSolver) => [solver.inputProblem],
-    ),
     definePipelineStep(
       FIND_FREE_SPACE,
       FindFreeSpaceSolver,
-      (solver: FixedTargetBgaFanoutSolver) => [
-        solver.requireStageOutput<FanoutModel>(BUILD_MODEL),
-      ],
+      (solver: FixedTargetBgaFanoutSolver) => [solver.requireFanoutModel()],
     ),
     definePipelineStep(
       RANK_NETS,
@@ -59,8 +54,28 @@ export class FixedTargetBgaFanoutSolver extends BasePipelineSolver<SimpleRouteJs
     super(structuredClone(input))
   }
 
+  override _setup() {
+    try {
+      this.fanoutModel = buildFanoutModel(this.inputProblem)
+    } catch (error) {
+      this.setupError = error
+    }
+  }
+
+  override _step() {
+    if (this.setupError) throw this.setupError
+    super._step()
+  }
+
   override getConstructorParams() {
     return [structuredClone(this.inputProblem)]
+  }
+
+  private requireFanoutModel(): FanoutModel {
+    if (!this.fanoutModel) {
+      throw new Error("fanout model requested before solver setup")
+    }
+    return this.fanoutModel
   }
 
   private requireStageOutput<T>(stageName: string): T {

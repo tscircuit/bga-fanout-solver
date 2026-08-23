@@ -1,4 +1,5 @@
 export { FixedTargetBgaFanoutSolver } from "./FixedTargetBgaFanoutSolver"
+export { buildFanoutModel } from "./model/buildFanoutModel"
 export type {
   FanoutModel,
   FanoutNet,

@@ -40,10 +40,18 @@ for React Cosmos and other solver debuggers.
 
 ## Extraction status
 
-Topology discovery, free-space region construction, and source ranking are
-incremental solvers. The proven top/inner routing search is temporarily kept in
-one private compatibility stage so this extraction preserves exact geometry
-while its mutually-dependent search phases are separated. It is not exported.
+SRJ-to-model conversion is a pure synchronous setup operation and is not shown
+as a solver stage. The debugger pipeline starts with incremental free-space
+region construction, followed by incremental source ranking and the private
+compatibility route stage. The proven top/inner routing search remains in that
+single compatibility stage so this extraction preserves exact geometry while
+its mutually-dependent search phases are separated. It is not exported.
+
+The visible pipeline is:
+
+1. `findFreeSpace`
+2. `rankFanoutNets`
+3. `compatibilityRoute`
 
 ## Development
 

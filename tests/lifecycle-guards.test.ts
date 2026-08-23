@@ -7,8 +7,13 @@ test("output is guarded and stepping a solved pipeline is a no-op", async () => 
     await loadFixture("lpddr4-ram-fanout"),
   )
   expect(() => solver.getOutput()).toThrow("before completion")
+  expect(solver.pipelineDef.map((stage) => stage.solverName)).toEqual([
+    "findFreeSpace",
+    "rankFanoutNets",
+    "compatibilityRoute",
+  ])
   solver.step()
-  expect(solver.getCurrentStageName()).toBe("buildFanoutModel")
+  expect(solver.getCurrentStageName()).toBe("findFreeSpace")
   expect(() => solver.getOutput()).toThrow("before completion")
 
   solver.solve()
