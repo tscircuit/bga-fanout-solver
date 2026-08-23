@@ -62,5 +62,23 @@
     "precommittedGroundSegments": 229,
     "expectedFailurePhase": "build_residual_via_lines",
     "shortByMillimeters": 1.6064
+  },
+  "consumerFailureFixture": {
+    "file": "simplified-am62l-ddr-soc-repro.srj.json",
+    "sourcePackage": "@tsci/0hmX.simplified-am62l-computer",
+    "sourceCircuit": "ddr-only.circuit.tsx",
+    "coreVersion": "0.0.1739",
+    "bytes": 244093,
+    "sha256": "02924e46ce5de659af7e1d6857ea293a8fcda7476054ec980d4a24db8b8e684b",
+    "layerCount": 8,
+    "connections": 33,
+    "obstacles": 373,
+    "transformations": [
+      "Capture the failing SoC breakout SimpleRouteJson through tsci --autorouter-dump-srj.",
+      "Retain the fixed breakout targets, ordered buses, and preferredLayer values exactly.",
+      "Remove the 200 RAM pad obstacles so the fixture contains only the independently solved SoC."
+    ],
+    "expectedFailurePhase": "build_residual_via_lines",
+    "shortByMillimeters": 11.04544
   }
 }

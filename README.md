@@ -17,6 +17,11 @@ escape, and reproduces the current power-first width failure. Its plane and
 local-rail data use a fixture-only contract; they do not expand the package's
 stable fixed-target API.
 
+The smaller `simplified-am62l-ddr-soc-repro.srj.json` fixture captures the
+consumer-side 8-layer, 33-signal SoC breakout with one preferred layer per DDR
+bus. It deterministically reproduces the current residual-via-line width
+failure without the RAM obstacles or any whole-board routing state.
+
 ## Supported problem shape
 
 - one dominant rectangular-lattice BGA source component;
