@@ -17,10 +17,16 @@ escape, and reproduces the current power-first width failure. Its plane and
 local-rail data use a fixture-only contract; they do not expand the package's
 stable fixed-target API.
 
-The smaller `simplified-am62l-ddr-soc-repro.srj.json` fixture captures the
-consumer-side 8-layer, 33-signal SoC breakout with one preferred layer per DDR
-bus. It deterministically reproduces the current residual-via-line width
-failure without the RAM obstacles or any whole-board routing state.
+The `simplified-am62l-ddr-{soc,ram}-repro.srj.json` fixtures are exact,
+unminimized constructor inputs captured from the published
+`@tsci/0hmX.simplified-am62l-computer@1.0.15` `index.circuit.tsx`. Each keeps
+all 1,050 runtime obstacles, including all 373 SoC pads and all 200 RAM pads,
+plus the original 8-layer bounds and rules, 33 fixed-target connections, three
+ordered DDR buses, target layers, and supplied traces. The SoC call fails while
+routing top-layer dogbones. A diagnostic zero-trace continuation after that
+failure allows Core to construct the otherwise unreachable RAM call, which
+fails while building its residual via lines. Neither fixture is derived from
+`ddr-only.circuit.tsx` or reduced to a single BGA.
 
 ## Supported problem shape
 

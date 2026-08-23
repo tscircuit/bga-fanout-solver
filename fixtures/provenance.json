@@ -63,22 +63,68 @@
     "expectedFailurePhase": "build_residual_via_lines",
     "shortByMillimeters": 1.6064
   },
-  "consumerFailureFixture": {
-    "file": "simplified-am62l-ddr-soc-repro.srj.json",
+  "consumerFailureCapture": {
     "sourcePackage": "@tsci/0hmX.simplified-am62l-computer",
-    "sourceCircuit": "ddr-only.circuit.tsx",
+    "sourcePackageVersion": "1.0.15",
+    "sourceGitCommit": "cd0975fa11324eea743d3ea8e12db94eb0e918a2",
+    "sourceCircuit": "index.circuit.tsx",
+    "sourceCircuitGitBlob": "3b8fef61ed64346bbc023343b8f26f7fca8268a7",
+    "sourceCircuitSha256": "0189fc1f91f3668aec167314502f47751fae9bd7a76a6d361a13a5296de14d1d",
+    "tscircuitVersion": "0.0.2387",
     "coreVersion": "0.0.1739",
-    "bytes": 244093,
-    "sha256": "02924e46ce5de659af7e1d6857ea293a8fcda7476054ec980d4a24db8b8e684b",
-    "layerCount": 8,
-    "connections": 33,
-    "obstacles": 373,
-    "transformations": [
-      "Capture the failing SoC breakout SimpleRouteJson through tsci --autorouter-dump-srj.",
-      "Retain the fixed breakout targets, ordered buses, and preferredLayer values exactly.",
-      "Remove the 200 RAM pad obstacles so the fixture contains only the independently solved SoC."
+    "bgaFanoutSolverGitHead": "af23a61b2287c7d445bc1f26f290f0a54e0c6eb3",
+    "captureCommand": "bunx tsci build index.circuit.tsx --autorouter-dump-srj all --solver-debug --solver-debug-dir dist/solver-debug",
+    "diagnosticOverrides": [
+      "Set placementDrcChecksDisabled only in a disposable worktree so the known seven placement errors do not prevent runtime autorouter construction.",
+      "Serialize each SimpleRouteJson constructor input unchanged as canonical two-space JSON with a trailing newline.",
+      "After capturing and running the SoC call to its natural failure, report an unchanged zero-trace completion only in diagnostic instrumentation so Core constructs the otherwise unreachable RAM call."
     ],
-    "expectedFailurePhase": "build_residual_via_lines",
-    "shortByMillimeters": 11.04544
+    "transformations": [],
+    "sharedRuntimeShape": {
+      "layerCount": 8,
+      "connections": 33,
+      "obstacles": 1050,
+      "socPadObstacles": 373,
+      "ramPadObstacles": 200,
+      "buses": 3,
+      "traces": 0,
+      "targetLayers": {
+        "bottom": 11,
+        "inner2": 11,
+        "inner5": 11
+      }
+    },
+    "fixtures": [
+      {
+        "file": "simplified-am62l-ddr-soc-repro.srj.json",
+        "callSequence": 1,
+        "routingPcbGroupId": "pcb_group_0",
+        "bytes": 11333145,
+        "sha256": "935b3a0dd04bf46718a362176c45dfe35493908b903fb3a28eacd4abe32cdecd",
+        "bounds": {
+          "minX": -3.6500000000000012,
+          "maxX": 7.650000000000001,
+          "minY": -4.650000000000001,
+          "maxY": 6.650000000000001
+        },
+        "expectedFailurePhase": "route_top_layer_dogbones",
+        "expectedFailureSignature": "no early-drop arrangement leaves a complete legal escape topology (23/33 total; best residual set 10/20)"
+      },
+      {
+        "file": "simplified-am62l-ddr-ram-repro.srj.json",
+        "callSequence": 2,
+        "routingPcbGroupId": "pcb_group_1",
+        "bytes": 11333327,
+        "sha256": "ceac58022065e5ef4e7efa96ef9226eeaa9f147a8dd8be6e2c01e8b2381901dd",
+        "bounds": {
+          "minX": 15.091917000000002,
+          "maxX": 29.141917,
+          "minY": -3.6509170000000006,
+          "maxY": 5.549083
+        },
+        "expectedFailurePhase": "build_residual_via_lines",
+        "expectedFailureSignature": "SRJ routing maxX -15.091917 mm is below the ordered ViaLine requirement -10.070397 mm (3 bus-preserving strings; short by 5.021520 mm)"
+      }
+    ]
   }
 }

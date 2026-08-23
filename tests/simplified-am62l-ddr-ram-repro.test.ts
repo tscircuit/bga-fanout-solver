@@ -1,12 +1,12 @@
 import { expect, test } from "bun:test"
 import type { SimpleRouteJson } from "@tscircuit/core"
-import fixtureData from "../fixtures/simplified-am62l-ddr-soc-repro.srj.json"
+import fixtureData from "../fixtures/simplified-am62l-ddr-ram-repro.srj.json"
 import { FixedTargetBgaFanoutSolver } from "../lib"
 
-const EXPECTED_FAILURE_PREFIX =
-  "[route_top_layer_dogbones] breakout:pcb_breakout_point_9: no early-drop arrangement leaves a complete legal escape topology (23/33 total; best residual set 10/20;"
+const EXPECTED_FAILURE =
+  "[build_residual_via_lines] all: SRJ routing maxX -15.091917 mm is below the ordered ViaLine requirement -10.070397 mm (3 bus-preserving strings; short by 5.021520 mm)"
 
-test("exact index.circuit.tsx SoC capture preserves its consumer failure", () => {
+test("exact index.circuit.tsx RAM capture preserves its consumer failure", () => {
   const input = structuredClone(fixtureData) as unknown as SimpleRouteJson
   const obstacleCountByComponentId = Object.groupBy(
     input.obstacles,
@@ -25,16 +25,6 @@ test("exact index.circuit.tsx SoC capture preserves its consumer failure", () =>
     ["DDR_COMMAND", "inner5"],
   ])
   expect(
-    Object.groupBy(
-      input.connections,
-      (connection) => connection.pointsToConnect[1]?.layer ?? "none",
-    ),
-  ).toMatchObject({
-    bottom: expect.any(Array),
-    inner2: expect.any(Array),
-    inner5: expect.any(Array),
-  })
-  expect(
     input.connections.filter(
       (connection) => connection.pointsToConnect[1]?.layer === "bottom",
     ),
@@ -51,8 +41,8 @@ test("exact index.circuit.tsx SoC capture preserves its consumer failure", () =>
   ).toHaveLength(11)
 
   const solver = new FixedTargetBgaFanoutSolver(input)
-  expect(() => solver.solve()).toThrow(EXPECTED_FAILURE_PREFIX)
+  expect(() => solver.solve()).toThrow(EXPECTED_FAILURE)
   expect(solver.failed).toBeTrue()
-  expect(solver.error).toContain(EXPECTED_FAILURE_PREFIX)
+  expect(solver.error).toContain(EXPECTED_FAILURE)
   expect(solver.getCurrentStageName()).toBe("compatibilityRoute")
 }, 120_000)
