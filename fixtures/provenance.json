@@ -1,0 +1,53 @@
+{
+  "schemaVersion": 1,
+  "sourceCircuit": {
+    "package": "@tsci/0hmX.am62l-lpddr4-breakout-repro",
+    "circuitJsonArtifact": "dist/index/circuit.json",
+    "historicalSocSrjArtifact": "tests/fixtures/am62l-soc-fanout.srj.json",
+    "historicalRamSrjArtifact": "tests/fixtures/lpddr4-ram-fanout.srj.json",
+    "coreVersion": "0.0.1736",
+    "coreGitHead": "33640c38c7760ed755e5cf5d0ed7033de6cdd762"
+  },
+  "parityOracle": {
+    "sourceArtifact": "am62l-lpddr4-breakout-repro/autorouting/solve-am62l-free-space-fanout.ts",
+    "goldens": [
+      {
+        "file": "tests/fixtures/am62l-soc-fanout.expected-traces.json",
+        "bytes": 106543,
+        "sha256": "26bbb428221e6fe88e1cd7da9d0b859ae14708e49dcb416417216ef0648fbfa7"
+      },
+      {
+        "file": "tests/fixtures/lpddr4-ram-fanout.expected-traces.json",
+        "bytes": 99435,
+        "sha256": "094a3af88f08c1d455eedab9c2aa19b3f1e07d3f34d4248a6ea57da3bb54b477"
+      }
+    ]
+  },
+  "transformations": [
+    "Rekey breakout target and connection identifiers from the current Circuit JSON by source_trace_id.",
+    "Preserve every fixed target x, y, and layer exactly.",
+    "Retain only the independently solved source BGA component obstacles.",
+    "Remove inherited supplied traces so each BGA fanout solves independently."
+  ],
+  "excludedScope": [
+    "implicit breakout-point calculation",
+    "middle-channel routing",
+    "whole-board routing"
+  ],
+  "fixtures": [
+    {
+      "file": "am62l-soc-fanout.srj.json",
+      "bytes": 245464,
+      "sha256": "00cb6e8f74e5e2ae1cb51015c5f7a8380fee88ab7df403291053c9055ca145d4",
+      "connections": 33,
+      "obstacles": 373
+    },
+    {
+      "file": "lpddr4-ram-fanout.srj.json",
+      "bytes": 147022,
+      "sha256": "6f56e2f2bce5eb276ab80eb6b3efbaea9b1188633269c3bd66e9ad2533479be2",
+      "connections": 33,
+      "obstacles": 200
+    }
+  ]
+}

@@ -1,0 +1,96 @@
+import type { SimpleRouteJson } from "@tscircuit/core"
+import {
+  BasePipelineSolver,
+  definePipelineStep,
+  type PipelineStep,
+} from "@tscircuit/solver-utils"
+import type { GraphicsObject } from "graphics-debug"
+import type {
+  FanoutModel,
+  FixedTargetBgaFanoutOutput,
+  FreeSpaceAnalysis,
+  RankedFanoutModel,
+} from "./model/types"
+import { CompatibilityRouteSolver } from "./private/CompatibilityRouteSolver"
+import { BuildFanoutModelSolver } from "./stages/BuildFanoutModelSolver"
+import { FindFreeSpaceSolver } from "./stages/FindFreeSpaceSolver"
+import { RankFanoutNetsSolver } from "./stages/RankFanoutNetsSolver"
+import { visualizeInput } from "./visualize/inputVisuals"
+
+const BUILD_MODEL = "buildFanoutModel"
+const FIND_FREE_SPACE = "findFreeSpace"
+const RANK_NETS = "rankFanoutNets"
+const COMPATIBILITY_ROUTE = "compatibilityRoute"
+
+export class FixedTargetBgaFanoutSolver extends BasePipelineSolver<SimpleRouteJson> {
+  override pipelineDef: PipelineStep<any>[] = [
+    definePipelineStep(
+      BUILD_MODEL,
+      BuildFanoutModelSolver,
+      (solver: FixedTargetBgaFanoutSolver) => [solver.inputProblem],
+    ),
+    definePipelineStep(
+      FIND_FREE_SPACE,
+      FindFreeSpaceSolver,
+      (solver: FixedTargetBgaFanoutSolver) => [
+        solver.requireStageOutput<FanoutModel>(BUILD_MODEL),
+      ],
+    ),
+    definePipelineStep(
+      RANK_NETS,
+      RankFanoutNetsSolver,
+      (solver: FixedTargetBgaFanoutSolver) => [
+        solver.requireStageOutput<FreeSpaceAnalysis>(FIND_FREE_SPACE),
+      ],
+    ),
+    definePipelineStep(
+      COMPATIBILITY_ROUTE,
+      CompatibilityRouteSolver,
+      (solver: FixedTargetBgaFanoutSolver) => [
+        {
+          input: solver.inputProblem,
+          rankedModel: solver.requireStageOutput<RankedFanoutModel>(RANK_NETS),
+        },
+      ],
+    ),
+  ]
+
+  constructor(input: SimpleRouteJson) {
+    super(structuredClone(input))
+  }
+
+  override getConstructorParams() {
+    return [structuredClone(this.inputProblem)]
+  }
+
+  private requireStageOutput<T>(stageName: string): T {
+    const output = this.getStageOutput<T>(stageName)
+    if (!output) {
+      throw new Error(`${stageName} did not produce an output`)
+    }
+    return output
+  }
+
+  override getOutput(): FixedTargetBgaFanoutOutput {
+    if (!this.solved) {
+      throw new Error(
+        "FixedTargetBgaFanoutSolver output requested before completion",
+      )
+    }
+    return this.requireStageOutput<FixedTargetBgaFanoutOutput>(
+      COMPATIBILITY_ROUTE,
+    )
+  }
+
+  override initialVisualize(): GraphicsObject {
+    return visualizeInput(this.inputProblem)
+  }
+
+  override finalVisualize(): GraphicsObject | null {
+    return (
+      this.getSolver<CompatibilityRouteSolver>(
+        COMPATIBILITY_ROUTE,
+      )?.visualize() ?? null
+    )
+  }
+}
