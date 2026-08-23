@@ -34,6 +34,13 @@ type VisualCollections = {
   rects: Rect[]
 }
 
+export const LOCAL_BREAKOUT_TARGET_LABEL =
+  "local breakout target (routed endpoint)"
+export const LOCAL_CONNECTION_GUIDE_LABEL =
+  "local breakout connection (source to routed endpoint)"
+export const VIRTUAL_EXIT_GUIDE_LABEL =
+  "virtual exit guide (not a routed endpoint)"
+
 const unique = <T>(values: readonly T[]): T[] => [...new Set(values)]
 
 const firstFiniteNumber = (
@@ -214,14 +221,17 @@ const addConnectionPoints = (
   const fallbackViaDiameter = getViaPadDiameter(input)
   for (const connection of input.connections) {
     const color = connectionColors.get(connection.name) ?? "#475569"
-    for (const point of connection.pointsToConnect) {
+    for (const [pointIndex, point] of connection.pointsToConnect.entries()) {
       const pointLayers = getPointLayers(point)
+      const pointRole =
+        pointIndex === 0 ? "BGA source pad" : LOCAL_BREAKOUT_TARGET_LABEL
       collections.points.push({
         x: point.x,
         y: point.y,
         color,
         layer: getGraphicsLayer(layerNames, pointLayers),
         label: [
+          pointRole,
           connection.name,
           point.pointId,
           point.port_selector,
@@ -246,6 +256,26 @@ const addConnectionPoints = (
         label: `${connection.name}\nterminal via ${point.layer} → ${point.terminalVia.toLayer}`,
       })
     }
+  }
+}
+
+const addLocalConnectionGuides = (
+  input: SimpleRouteJson,
+  collections: VisualCollections,
+  connectionColors: ReadonlyMap<string, string>,
+) => {
+  for (const connection of input.connections) {
+    const source = connection.pointsToConnect[0]
+    const localTarget = connection.pointsToConnect[1]
+    if (!source || !localTarget || isSamePoint(source, localTarget)) continue
+    const color = connectionColors.get(connection.name) ?? "#475569"
+    collections.lines.push({
+      points: [source, localTarget],
+      strokeColor: safeTransparentize(color, 0.25),
+      strokeWidth: 0.02,
+      strokeDash: [0.06, 0.05],
+      label: `${LOCAL_CONNECTION_GUIDE_LABEL}\n${connection.name}`,
+    })
   }
 }
 
@@ -417,19 +447,34 @@ const addBusExitTargets = (
       const target = bus.connectionExitTargets?.[connectionName]
       if (!target) continue
       const color = connectionColors.get(connectionName) ?? "#0f766e"
-      collections.points.push({
-        ...target,
-        color,
-        label: `${busLabel}\n${connectionName}\nexit target`,
-      })
-      const source = connections.get(connectionName)?.pointsToConnect[0]
-      if (!source || isSamePoint(source, target)) continue
+      const guideColor = safeTransparentize(color, 0.55)
+      const markerRadius = Math.max(0.08, getViaPadDiameter(input) * 0.28)
+      const label = `${VIRTUAL_EXIT_GUIDE_LABEL}\n${busLabel}\n${connectionName}`
+      for (const slope of [-1, 1]) {
+        collections.lines.push({
+          points: [
+            {
+              x: target.x - markerRadius,
+              y: target.y - slope * markerRadius,
+            },
+            {
+              x: target.x + markerRadius,
+              y: target.y + slope * markerRadius,
+            },
+          ],
+          strokeColor: guideColor,
+          strokeWidth: 0.02,
+          label: `${label}\nmarker`,
+        })
+      }
+      const localTarget = connections.get(connectionName)?.pointsToConnect[1]
+      if (!localTarget || isSamePoint(localTarget, target)) continue
       collections.lines.push({
-        points: [source, target],
-        strokeColor: safeTransparentize(color, 0.35),
-        strokeWidth: 0.015,
+        points: [localTarget, target],
+        strokeColor: guideColor,
+        strokeWidth: 0.012,
         strokeDash: [0.08, 0.08],
-        label: `${busLabel}\n${connectionName}\nconnection exit target`,
+        label: `${label}\nlocal boundary to opposite breakout boundary`,
       })
     }
   }
@@ -452,6 +497,7 @@ export const visualizeSimpleRouteJson = (
     addObstacle({ collections, input, obstacle })
   }
   addConnectionPoints(input, collections, connectionColors)
+  addLocalConnectionGuides(input, collections, connectionColors)
   addTraces(input, collections, connectionColors)
   addStandaloneJumpers(input, collections)
   addBusExitTargets(input, collections, connectionColors)
