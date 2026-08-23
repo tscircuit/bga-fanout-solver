@@ -9,6 +9,7 @@ import type {
 // replacement with exact parity. It is deliberately not exported publicly.
 import { AM62L_FREE_SPACE_FANOUT_PHASES } from "./am62l-free-space-fanout"
 import type { InProcessAutorouterResult } from "./create-in-process-autorouter"
+import { squaredDistance } from "./squared-distance"
 
 type Point = { x: number; y: number }
 type Segment = { a: Point; b: Point }
@@ -1112,10 +1113,11 @@ const assignEarlyDrops = (model: GeometryModel) => {
       .map((cell) => ({
         cell,
         distance: distance(net.source, cell),
+        distanceSquared: squaredDistance(net.source, cell),
       }))
       .sort(
         (first, second) =>
-          first.distance - second.distance ||
+          first.distanceSquared - second.distanceSquared ||
           second.cell.clearance - first.cell.clearance ||
           first.cell.row - second.cell.row ||
           first.cell.column - second.cell.column,
