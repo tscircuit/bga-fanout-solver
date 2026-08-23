@@ -6,6 +6,7 @@ type CaptureSpec = {
   sourcePath: string
   outputFile: string
   routingPcbGroupId: string
+  sha256: string
 }
 
 const [, , socSourcePath, ramSourcePath] = process.argv
@@ -21,23 +22,34 @@ const captures: CaptureSpec[] = [
     sourcePath: socSourcePath,
     outputFile: "simplified-am62l-ddr-soc-repro.srj.json",
     routingPcbGroupId: "pcb_group_0",
+    sha256: "4ea12abe2d3f55ddc62e3d54ef48a810aa38fefb2dad7d9bc889036111afda2e",
   },
   {
     label: "RAM",
     sourcePath: ramSourcePath,
     outputFile: "simplified-am62l-ddr-ram-repro.srj.json",
     routingPcbGroupId: "pcb_group_1",
+    sha256: "064b160282d79571e524b92883994a0be78da814d2e2ea40391cd6deff45131f",
   },
 ]
 
 for (const capture of captures) {
   const absoluteSourcePath = path.resolve(capture.sourcePath)
-  const sourceText = await Bun.file(absoluteSourcePath).text()
+  const sourceBytes = await Bun.file(absoluteSourcePath).arrayBuffer()
+  const sourceText = new TextDecoder().decode(sourceBytes)
   const input = JSON.parse(sourceText) as SimpleRouteJson
   const canonicalText = `${JSON.stringify(input, null, 2)}\n`
   if (sourceText !== canonicalText) {
     throw new Error(
       `${capture.label} capture is not canonical two-space JSON with a trailing newline`,
+    )
+  }
+  const sourceSha256 = new Bun.CryptoHasher("sha256")
+    .update(new Uint8Array(sourceBytes))
+    .digest("hex")
+  if (sourceSha256 !== capture.sha256) {
+    throw new Error(
+      `${capture.label} capture SHA-256 ${sourceSha256} does not match expected raw boundary hash ${capture.sha256}`,
     )
   }
 
@@ -56,7 +68,7 @@ for (const capture of captures) {
   if (
     input.layerCount !== 8 ||
     input.connections.length !== 33 ||
-    input.obstacles.length !== 1050 ||
+    input.obstacles.length !== 988 ||
     input.traces?.length !== 0 ||
     input.buses?.length !== 3 ||
     obstacleCountByComponentId.get("pcb_component_0") !== 373 ||
@@ -73,6 +85,15 @@ for (const capture of captures) {
     import.meta.dir,
     `../fixtures/${capture.outputFile}`,
   )
-  await Bun.write(outputPath, sourceText)
-  console.log(`Copied exact ${capture.label} runtime capture to ${outputPath}`)
+  await Bun.write(outputPath, sourceBytes)
+  const outputBytes = await Bun.file(outputPath).arrayBuffer()
+  const outputSha256 = new Bun.CryptoHasher("sha256")
+    .update(new Uint8Array(outputBytes))
+    .digest("hex")
+  if (outputSha256 !== sourceSha256) {
+    throw new Error(`${capture.label} copy changed the raw capture bytes`)
+  }
+  console.log(
+    `Copied exact ${capture.label} algorithmFn boundary capture (${sourceSha256}) to ${outputPath}`,
+  )
 }

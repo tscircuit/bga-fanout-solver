@@ -1,12 +1,10 @@
 import { expect, test } from "bun:test"
+import path from "node:path"
 import type { SimpleRouteJson } from "@tscircuit/core"
 import fixtureData from "../fixtures/simplified-am62l-ddr-ram-repro.srj.json"
 import { FixedTargetBgaFanoutSolver } from "../lib"
 
-const EXPECTED_FAILURE =
-  "[build_residual_via_lines] all: SRJ routing maxX -15.091917 mm is below the ordered ViaLine requirement -10.070397 mm (3 bus-preserving strings; short by 5.021520 mm)"
-
-test("exact index.circuit.tsx RAM capture preserves its consumer failure", () => {
+test("exact index.circuit.tsx RAM capture preserves its bounded compatibility stall", async () => {
   const input = structuredClone(fixtureData) as unknown as SimpleRouteJson
   const obstacleCountByComponentId = Object.groupBy(
     input.obstacles,
@@ -15,8 +13,14 @@ test("exact index.circuit.tsx RAM capture preserves its consumer failure", () =>
 
   expect(input.layerCount).toBe(8)
   expect(input.connections).toHaveLength(33)
-  expect(input.obstacles).toHaveLength(1050)
+  expect(input.obstacles).toHaveLength(988)
   expect(input.traces).toHaveLength(0)
+  expect(input.bounds).toEqual({
+    minX: 17.65,
+    maxX: 41.7,
+    minY: -8.650917000000002,
+    maxY: 10.549083000000001,
+  })
   expect(obstacleCountByComponentId.pcb_component_0).toHaveLength(373)
   expect(obstacleCountByComponentId.pcb_component_1).toHaveLength(200)
   expect(input.buses?.map((bus) => [bus.busId, bus.preferredLayer])).toEqual([
@@ -41,8 +45,38 @@ test("exact index.circuit.tsx RAM capture preserves its consumer failure", () =>
   ).toHaveLength(11)
 
   const solver = new FixedTargetBgaFanoutSolver(input)
-  expect(() => solver.solve()).toThrow(EXPECTED_FAILURE)
-  expect(solver.failed).toBeTrue()
-  expect(solver.error).toContain(EXPECTED_FAILURE)
+  solver.solveUntilStage("compatibilityRoute")
   expect(solver.getCurrentStageName()).toBe("compatibilityRoute")
-}, 120_000)
+
+  const repositoryRoot = path.resolve(import.meta.dir, "..")
+  const child = Bun.spawn({
+    cmd: [
+      process.execPath,
+      "-e",
+      `import input from "./fixtures/simplified-am62l-ddr-ram-repro.srj.json";
+       import { FixedTargetBgaFanoutSolver } from "./lib";
+       const solver = new FixedTargetBgaFanoutSolver(structuredClone(input));
+       solver.solve();
+       console.log(JSON.stringify({ solved: solver.solved, failed: solver.failed, error: solver.error }));`,
+    ],
+    cwd: repositoryRoot,
+    stdout: "pipe",
+    stderr: "pipe",
+  })
+  const outcome = await Promise.race([
+    child.exited.then(async (exitCode) => ({
+      kind: "exit" as const,
+      exitCode,
+      stdout: await new Response(child.stdout).text(),
+      stderr: await new Response(child.stderr).text(),
+    })),
+    Bun.sleep(5_000).then(() => ({ kind: "timeout" as const })),
+  ])
+
+  if (outcome.kind === "timeout") {
+    child.kill("SIGKILL")
+    await child.exited
+  }
+
+  expect(outcome).toEqual({ kind: "timeout" })
+}, 20_000)

@@ -17,16 +17,24 @@ escape, and reproduces the current power-first width failure. Its plane and
 local-rail data use a fixture-only contract; they do not expand the package's
 stable fixed-target API.
 
-The `simplified-am62l-ddr-{soc,ram}-repro.srj.json` fixtures are exact,
-unminimized constructor inputs captured from the published
-`@tsci/0hmX.simplified-am62l-computer@1.0.15` `index.circuit.tsx`. Each keeps
-all 1,050 runtime obstacles, including all 373 SoC pads and all 200 RAM pads,
-plus the original 8-layer bounds and rules, 33 fixed-target connections, three
-ordered DDR buses, target layers, and supplied traces. The SoC call fails while
-routing top-layer dogbones. A diagnostic zero-trace continuation after that
-failure allows Core to construct the otherwise unreachable RAM call, which
-fails while building its residual via lines. Neither fixture is derived from
-`ddr-only.circuit.tsx` or reduced to a single BGA.
+The `simplified-am62l-ddr-{soc,ram}-repro.srj.json` fixtures are byte-for-byte
+JSON serializations of the raw `SimpleRouteJson` arguments passed to each
+breakout `algorithmFn` by `@tscircuit/core@0.0.1739`. They were captured from
+`@tsci/0hmX.simplified-am62l-computer@1.0.15` `index.circuit.tsx` at PR #6
+commit `ddcbb51`. No adapter or solver transformation runs before capture, and
+the importer copies the validated bytes without rewriting them.
+
+Each raw input contains all 988 obstacles supplied by Core, including all 373
+SoC pads and all 200 RAM pads, plus the original 8-layer bounds and rules, 33
+fixed-target connections, three ordered DDR buses, target layers, and zero
+traces. The unrelated board obstacles in both per-breakout inputs document a
+current Core breakout-scoping limitation; they are intentionally retained
+rather than filtered here. The SoC call naturally fails while routing top-layer
+dogbones. A diagnostic zero-trace continuation after that failure allows Core
+to construct the otherwise unreachable raw RAM call; its monolithic
+compatibility step did not return during the 210-second capture window. Neither
+fixture is derived from `ddr-only.circuit.tsx`, minimized, or reduced to a
+single BGA.
 
 ## Supported problem shape
 

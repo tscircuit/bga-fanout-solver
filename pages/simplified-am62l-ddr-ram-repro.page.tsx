@@ -5,7 +5,7 @@ import { FixedTargetFanoutPage } from "./FixedTargetFanoutPage"
 export default () => (
   <FixedTargetFanoutPage
     input={input as unknown as SimpleRouteJson}
-    title="Exact simplified-am62l index RAM capture"
-    description="Unminimized runtime call 2 from @tsci/0hmX.simplified-am62l-computer@1.0.15 index.circuit.tsx after diagnostic zero-trace continuation of the SoC failure: 33 connections and all 1,050 board obstacles, including 373 SoC and 200 RAM pads."
+    title="Raw current index RAM algorithmFn capture"
+    description="Exact unmodified breakout algorithmFn argument from simplified-am62l-computer PR #6 commit ddcbb51, reached only after a diagnostic zero-trace SoC continuation: 33 connections and all 988 Core-supplied board obstacles, including 373 SoC and 200 RAM pads. The monolithic compatibility step currently stalls."
   />
 )

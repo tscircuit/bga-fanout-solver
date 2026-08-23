@@ -5,7 +5,7 @@ import { FixedTargetFanoutPage } from "./FixedTargetFanoutPage"
 export default () => (
   <FixedTargetFanoutPage
     input={input as unknown as SimpleRouteJson}
-    title="Exact simplified-am62l index SoC capture"
-    description="Unminimized runtime call 1 from @tsci/0hmX.simplified-am62l-computer@1.0.15 index.circuit.tsx: 33 connections and all 1,050 board obstacles, including 373 SoC and 200 RAM pads."
+    title="Raw current index SoC algorithmFn capture"
+    description="Exact unmodified breakout algorithmFn argument from simplified-am62l-computer PR #6 commit ddcbb51: 33 connections and all 988 Core-supplied board obstacles, including 373 SoC and 200 RAM pads. The board-wide obstacles expose Core breakout scoping; the solver fails at route_top_layer_dogbones."
   />
 )
