@@ -62,5 +62,87 @@
     "precommittedGroundSegments": 229,
     "expectedFailurePhase": "build_residual_via_lines",
     "shortByMillimeters": 1.6064
+  },
+  "consumerFailureCapture": {
+    "sourcePackage": "@tsci/0hmX.simplified-am62l-computer",
+    "sourcePackageVersion": "1.0.15",
+    "sourceGitCommit": "8063a9a39364d38238a2063d0d6158dec56b0593",
+    "sourcePullRequest": "https://github.com/0hmX/simplified-am62l-computer/pull/6",
+    "sourceCircuit": "index.circuit.tsx",
+    "sourceCircuitGitBlob": "50b6d62a537b64c52b06ac04e86cbf737bd14087",
+    "sourceCircuitSha256": "8b1dd26298f2ede445c34ff8db62467a4d0521a31d6f893bbee1469591dfeaf1",
+    "tscircuitVersion": "0.0.2387",
+    "coreVersion": "0.0.1741",
+    "coreGitHead": "1a914b60f8d12f082c53d85c4ea218591bf5589d",
+    "corePullRequest": "https://github.com/tscircuit/core/pull/3389",
+    "bgaFanoutSolverGitHead": "af23a61b2287c7d445bc1f26f290f0a54e0c6eb3",
+    "captureBoundary": "Exact SimpleRouteJson argument passed into each breakout algorithmFn, before the consumer adapter and FixedTargetBgaFanoutSolver constructor",
+    "captureCommand": "AM62L_RAW_CAPTURE_DIR=<capture-directory> bunx tsci build index.circuit.tsx --ignore-errors --ignore-placement-drc --autorouter-phase ddr-critical --autorouter-debug-dir <debug-directory> --autorouter-dump-srj all --autorouter-timeout 60s",
+    "diagnosticOverrides": [
+      "Link the disposable consumer worktree to the locally built Core PR #3389 commit 1a914b60; never commit that machine-local dependency path.",
+      "Serialize each algorithmFn argument at function entry, before the consumer adapter or solver constructor, as two-space JSON with its capture newline; copy those exact bytes without subsequent filtering, normalization, or reserialization.",
+      "Capture the SoC call naturally through its solver failure, then verify the diagnostic continuation sees a byte-identical SoC argument.",
+      "Report an unchanged zero-trace completion only in the diagnostic custom solver so Core constructs the otherwise unreachable RAM call; capture the RAM argument before its adapter or solver and verify it has zero prior traces."
+    ],
+    "transformations": [],
+    "producerCorrection": "Core PR #3389 preserves the full subcircuit-wide obstacle and accumulated-trace content, using the active routingPcbGroupId only to replace outline-less unbroken copper-pour obstacles with geometry clipped to the current breakout group.",
+    "sharedRuntimeShape": {
+      "layerCount": 8,
+      "connections": 33,
+      "obstacles": 988,
+      "nonPourObstacles": 986,
+      "socPadObstacles": 373,
+      "ramPadObstacles": 200,
+      "buses": 3,
+      "traces": 0,
+      "canonicalNonPourSha256": "c2a4fbf54853706cfa1d72f14a435f56e309aabb9fa5b3821929b3ba8b15a9b2",
+      "targetLayers": {
+        "bottom": 11,
+        "inner2": 11,
+        "inner5": 11
+      }
+    },
+    "fixtures": [
+      {
+        "file": "simplified-am62l-ddr-soc-repro.srj.json",
+        "callSequence": 1,
+        "routingPcbGroupId": "pcb_group_0",
+        "bytes": 9164064,
+        "sha256": "4ea12abe2d3f55ddc62e3d54ef48a810aa38fefb2dad7d9bc889036111afda2e",
+        "naturalCaptureSha256": "4ea12abe2d3f55ddc62e3d54ef48a810aa38fefb2dad7d9bc889036111afda2e",
+        "diagnosticCaptureSha256": "4ea12abe2d3f55ddc62e3d54ef48a810aa38fefb2dad7d9bc889036111afda2e",
+        "byteIdenticalToPriorFixtureAtGitCommit": "1beb42e",
+        "obstacles": 988,
+        "nonPourObstacles": 986,
+        "copperPourObstacles": 2,
+        "bounds": {
+          "minX": -8.650000000000002,
+          "maxX": 12.650000000000002,
+          "minY": -9.650000000000002,
+          "maxY": 11.650000000000002
+        },
+        "expectedFailurePhase": "route_top_layer_dogbones",
+        "expectedFailureSignature": "no early-drop arrangement leaves a complete legal escape topology (23/33 total; best residual set 10/20)"
+      },
+      {
+        "file": "simplified-am62l-ddr-ram-repro.srj.json",
+        "callSequence": 2,
+        "routingPcbGroupId": "pcb_group_1",
+        "bytes": 9164057,
+        "sha256": "824cc9d1f3189b4624631bc7f8d83988d425376447061e82f53a2d629c0fc3e4",
+        "obstacles": 988,
+        "nonPourObstacles": 986,
+        "copperPourObstacles": 2,
+        "differenceFromPriorFixtureAtGitCommit": "1beb42e: only the two isCopperPour obstacle objects move from SoC bounds to RAM bounds; all 986 non-pours and all non-obstacle content are canonical-identical",
+        "bounds": {
+          "minX": 17.65,
+          "maxX": 41.7,
+          "minY": -8.650917000000002,
+          "maxY": 10.549083000000001
+        },
+        "expectedFailurePhase": "compatibilityRoute",
+        "expectedFailureSignature": "The monolithic compatibility step did not return during the 210-second raw-capture run; the focused test confirms the isolated solver remains active after 5 seconds and terminates only that subprocess."
+      }
+    ]
   }
 }

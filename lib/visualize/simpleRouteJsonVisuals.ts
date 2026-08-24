@@ -34,6 +34,9 @@ type VisualCollections = {
   rects: Rect[]
 }
 
+export const LOCAL_CONNECTION_GUIDE_LABEL =
+  "local breakout connection (source to routed endpoint)"
+
 const unique = <T>(values: readonly T[]): T[] => [...new Set(values)]
 
 const firstFiniteNumber = (
@@ -249,6 +252,26 @@ const addConnectionPoints = (
   }
 }
 
+const addLocalConnectionGuides = (
+  input: SimpleRouteJson,
+  collections: VisualCollections,
+  connectionColors: ReadonlyMap<string, string>,
+) => {
+  for (const connection of input.connections) {
+    const source = connection.pointsToConnect[0]
+    const localTarget = connection.pointsToConnect[1]
+    if (!source || !localTarget || isSamePoint(source, localTarget)) continue
+    const color = connectionColors.get(connection.name) ?? "#475569"
+    collections.lines.push({
+      points: [source, localTarget],
+      strokeColor: safeTransparentize(color, 0.25),
+      strokeWidth: 0.02,
+      strokeDash: [0.06, 0.05],
+      label: `${LOCAL_CONNECTION_GUIDE_LABEL}\n${connection.name}`,
+    })
+  }
+}
+
 const isSamePoint = (
   first: { x: number; y: number },
   second: { x: number; y: number },
@@ -403,38 +426,6 @@ const addStandaloneJumpers = (
   }
 }
 
-const addBusExitTargets = (
-  input: SimpleRouteJson,
-  collections: VisualCollections,
-  connectionColors: ReadonlyMap<string, string>,
-) => {
-  const connections = new Map(
-    input.connections.map((connection) => [connection.name, connection]),
-  )
-  for (const bus of input.buses ?? []) {
-    const busLabel = bus.name ?? bus.busId
-    for (const connectionName of bus.connectionNames) {
-      const target = bus.connectionExitTargets?.[connectionName]
-      if (!target) continue
-      const color = connectionColors.get(connectionName) ?? "#0f766e"
-      collections.points.push({
-        ...target,
-        color,
-        label: `${busLabel}\n${connectionName}\nexit target`,
-      })
-      const source = connections.get(connectionName)?.pointsToConnect[0]
-      if (!source || isSamePoint(source, target)) continue
-      collections.lines.push({
-        points: [source, target],
-        strokeColor: safeTransparentize(color, 0.35),
-        strokeWidth: 0.015,
-        strokeDash: [0.08, 0.08],
-        label: `${busLabel}\n${connectionName}\nconnection exit target`,
-      })
-    }
-  }
-}
-
 export const visualizeSimpleRouteJson = (
   input: SimpleRouteJson,
 ): GraphicsObject => {
@@ -452,9 +443,9 @@ export const visualizeSimpleRouteJson = (
     addObstacle({ collections, input, obstacle })
   }
   addConnectionPoints(input, collections, connectionColors)
+  addLocalConnectionGuides(input, collections, connectionColors)
   addTraces(input, collections, connectionColors)
   addStandaloneJumpers(input, collections)
-  addBusExitTargets(input, collections, connectionColors)
 
   return {
     coordinateSystem: "cartesian",

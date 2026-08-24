@@ -9,6 +9,8 @@ const exportDirectory = path.resolve(import.meta.dir, "../cosmos-export")
 const expectedFixtureFiles = [
   "pages/full-am62l-soc-failing-repro.page.tsx",
   "pages/ram-bga.page.tsx",
+  "pages/simplified-am62l-ddr-ram-repro.page.tsx",
+  "pages/simplified-am62l-ddr-soc-repro.page.tsx",
   "pages/soc-bga.page.tsx",
 ]
 const sourceModulePattern = /(?:^|["'(=/])src\/[^"')?]+\.(?:jsx?|tsx?)/i
@@ -70,7 +72,7 @@ const manifest = (await Bun.file(manifestPath).json()) as CosmosFixtureManifest
 const fixtureFiles = manifest.fixtures.map((fixture) => fixture.filePath).sort()
 if (JSON.stringify(fixtureFiles) !== JSON.stringify(expectedFixtureFiles)) {
   throw new Error(
-    `Expected exactly the two passing BGA fixtures and the full-SoC failing repro, found ${fixtureFiles.join(", ")}`,
+    `Expected exactly the two passing BGA fixtures and three failing repros, found ${fixtureFiles.join(", ")}`,
   )
 }
 
