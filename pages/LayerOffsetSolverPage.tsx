@@ -13,8 +13,9 @@ export const LayerOffsetSolverPage = ({
 
   return (
     <main style={{ minHeight: "100vh", background: "#ffffff" }}>
+      <label htmlFor="layer-offset">Layer offset</label>
       <input
-        aria-label="Layer offset"
+        id="layer-offset"
         type="number"
         step="0.1"
         value={layerOffsetInput}
