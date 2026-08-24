@@ -16,6 +16,7 @@ import { CompatibilityRouteSolver } from "./private/CompatibilityRouteSolver"
 import { FindFreeSpaceSolver } from "./stages/FindFreeSpaceSolver"
 import { RankFanoutNetsSolver } from "./stages/RankFanoutNetsSolver"
 import { visualizeInput } from "./visualize/inputVisuals"
+import { offsetGraphicsLayers } from "./visualize/offsetGraphicsLayers"
 
 const FIND_FREE_SPACE = "findFreeSpace"
 const RANK_NETS = "rankFanoutNets"
@@ -24,6 +25,7 @@ const COMPATIBILITY_ROUTE = "compatibilityRoute"
 export class FixedTargetBgaFanoutSolver extends BasePipelineSolver<SimpleRouteJson> {
   private fanoutModel: FanoutModel | null = null
   private readonly inputVisualization: GraphicsObject
+  private readonly layerOffset: number
   private setupError: unknown | null = null
 
   override pipelineDef: PipelineStep<any>[] = [
@@ -51,9 +53,10 @@ export class FixedTargetBgaFanoutSolver extends BasePipelineSolver<SimpleRouteJs
     ),
   ]
 
-  constructor(input: SimpleRouteJson) {
+  constructor(input: SimpleRouteJson, { layerOffset = 0 } = {}) {
     super(structuredClone(input))
     this.inputVisualization = visualizeInput(this.inputProblem)
+    this.layerOffset = layerOffset
   }
 
   override _setup() {
@@ -104,7 +107,11 @@ export class FixedTargetBgaFanoutSolver extends BasePipelineSolver<SimpleRouteJs
   }
 
   override visualize(): GraphicsObject {
-    return mergeGraphics(this.inputVisualization, super.visualize())
+    return offsetGraphicsLayers(
+      mergeGraphics(this.inputVisualization, super.visualize()),
+      this.inputProblem.layerCount,
+      this.layerOffset,
+    )
   }
 
   override preview(): GraphicsObject {
