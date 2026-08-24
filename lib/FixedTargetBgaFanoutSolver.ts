@@ -4,22 +4,32 @@ import {
   definePipelineStep,
   type PipelineStep,
 } from "@tscircuit/solver-utils"
-import { mergeGraphics, type GraphicsObject } from "graphics-debug"
+import { type GraphicsObject, mergeGraphics } from "graphics-debug"
 import { buildFanoutModel } from "./model/buildFanoutModel"
 import type {
   FanoutModel,
   FixedTargetBgaFanoutOutput,
   FreeSpaceAnalysis,
   RankedFanoutModel,
+  ViaFirstFanoutPlan,
+  ViaFirstRouteCandidate,
 } from "./model/types"
-import { CompatibilityRouteSolver } from "./private/CompatibilityRouteSolver"
+import { AssignViaLinesSolver } from "./stages/AssignViaLinesSolver"
+import { ConnectBallToViaSolver } from "./stages/ConnectBallToViaSolver"
+import { ConnectViaToTargetSolver } from "./stages/ConnectViaToTargetSolver"
 import { FindFreeSpaceSolver } from "./stages/FindFreeSpaceSolver"
 import { RankFanoutNetsSolver } from "./stages/RankFanoutNetsSolver"
+import { RepairRouteConflictsSolver } from "./stages/RepairRouteConflictsSolver"
+import { ValidateAndBuildOutputSolver } from "./stages/ValidateAndBuildOutputSolver"
 import { visualizeInput } from "./visualize/inputVisuals"
 
 const FIND_FREE_SPACE = "findFreeSpace"
 const RANK_NETS = "rankFanoutNets"
-const COMPATIBILITY_ROUTE = "compatibilityRoute"
+const ASSIGN_VIA_LINES = "assignViaLines"
+const CONNECT_BALL_TO_VIA = "connectBallToVia"
+const CONNECT_VIA_TO_TARGET = "connectViaToTarget"
+const REPAIR_ROUTE_CONFLICTS = "repairRouteConflicts"
+const VALIDATE_AND_BUILD_OUTPUT = "validateAndBuildOutput"
 
 export class FixedTargetBgaFanoutSolver extends BasePipelineSolver<SimpleRouteJson> {
   private fanoutModel: FanoutModel | null = null
@@ -40,13 +50,42 @@ export class FixedTargetBgaFanoutSolver extends BasePipelineSolver<SimpleRouteJs
       ],
     ),
     definePipelineStep(
-      COMPATIBILITY_ROUTE,
-      CompatibilityRouteSolver,
+      ASSIGN_VIA_LINES,
+      AssignViaLinesSolver,
       (solver: FixedTargetBgaFanoutSolver) => [
-        {
-          input: solver.inputProblem,
-          rankedModel: solver.requireStageOutput<RankedFanoutModel>(RANK_NETS),
-        },
+        solver.requireStageOutput<RankedFanoutModel>(RANK_NETS),
+      ],
+    ),
+    definePipelineStep(
+      CONNECT_BALL_TO_VIA,
+      ConnectBallToViaSolver,
+      (solver: FixedTargetBgaFanoutSolver) => [
+        solver.requireStageOutput<ViaFirstFanoutPlan>(ASSIGN_VIA_LINES),
+      ],
+    ),
+    definePipelineStep(
+      CONNECT_VIA_TO_TARGET,
+      ConnectViaToTargetSolver,
+      (solver: FixedTargetBgaFanoutSolver) => [
+        solver.requireStageOutput<ViaFirstRouteCandidate>(CONNECT_BALL_TO_VIA),
+      ],
+    ),
+    definePipelineStep(
+      REPAIR_ROUTE_CONFLICTS,
+      RepairRouteConflictsSolver,
+      (solver: FixedTargetBgaFanoutSolver) => [
+        solver.requireStageOutput<ViaFirstRouteCandidate>(
+          CONNECT_VIA_TO_TARGET,
+        ),
+      ],
+    ),
+    definePipelineStep(
+      VALIDATE_AND_BUILD_OUTPUT,
+      ValidateAndBuildOutputSolver,
+      (solver: FixedTargetBgaFanoutSolver) => [
+        solver.requireStageOutput<ViaFirstRouteCandidate>(
+          REPAIR_ROUTE_CONFLICTS,
+        ),
       ],
     ),
   ]
@@ -95,7 +134,7 @@ export class FixedTargetBgaFanoutSolver extends BasePipelineSolver<SimpleRouteJs
       )
     }
     return this.requireStageOutput<FixedTargetBgaFanoutOutput>(
-      COMPATIBILITY_ROUTE,
+      VALIDATE_AND_BUILD_OUTPUT,
     )
   }
 
@@ -113,8 +152,8 @@ export class FixedTargetBgaFanoutSolver extends BasePipelineSolver<SimpleRouteJs
 
   override finalVisualize(): GraphicsObject | null {
     return (
-      this.getSolver<CompatibilityRouteSolver>(
-        COMPATIBILITY_ROUTE,
+      this.getSolver<ValidateAndBuildOutputSolver>(
+        VALIDATE_AND_BUILD_OUTPUT,
       )?.visualize() ?? null
     )
   }

@@ -72,6 +72,49 @@ export type FreeSpaceAnalysis = {
 
 export type RankedFanoutModel = FreeSpaceAnalysis
 
+export type ViaAssignment = {
+  connectionName: string
+  via: Point
+  viaLineId: string
+  slotIndex: number
+}
+
+export type ViaFirstFanoutPlan = RankedFanoutModel & {
+  viaAssignments: ViaAssignment[]
+}
+
+export type CandidateFanoutRoute = {
+  net: FanoutNet
+  via: Point
+  viaLineId: string
+  slotIndex: number
+  topPath: Point[]
+  innerPath: Point[]
+}
+
+export type RouteViolationKind =
+  | "bounds"
+  | "endpoint"
+  | "non_octilinear"
+  | "trace_to_pad"
+  | "trace_to_trace"
+  | "trace_to_via"
+  | "via_to_via"
+
+export type RouteViolation = {
+  kind: RouteViolationKind
+  connectionNames: string[]
+  layer: string
+  amount: number
+  message: string
+}
+
+export type ViaFirstRouteCandidate = {
+  plan: ViaFirstFanoutPlan
+  routes: CandidateFanoutRoute[]
+  violations: RouteViolation[]
+}
+
 export type FixedTargetBgaFanoutOutput = {
   traces: SimplifiedPcbTrace[]
   outputSimpleRouteJson: SimpleRouteJson
