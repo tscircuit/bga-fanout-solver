@@ -15,7 +15,7 @@ test("exact index.circuit.tsx SoC capture preserves its consumer failure", () =>
 
   expect(input.layerCount).toBe(8)
   expect(input.connections).toHaveLength(33)
-  expect(input.obstacles).toHaveLength(988)
+  expect(input.obstacles).toHaveLength(375)
   expect(input.traces).toHaveLength(0)
   expect(input.bounds).toEqual({
     minX: -8.650000000000002,
@@ -24,7 +24,20 @@ test("exact index.circuit.tsx SoC capture preserves its consumer failure", () =>
     maxY: 11.650000000000002,
   })
   expect(obstacleCountByComponentId.pcb_component_0).toHaveLength(373)
-  expect(obstacleCountByComponentId.pcb_component_1).toHaveLength(200)
+  expect(input.obstacles.filter((obstacle) => obstacle.isCopperPour)).toEqual([
+    expect.objectContaining({
+      center: { x: 2, y: 1 },
+      width: 21.300000000000004,
+      height: 21.300000000000004,
+      layers: ["inner1"],
+    }),
+    expect.objectContaining({
+      center: { x: 2, y: 1 },
+      width: 21.300000000000004,
+      height: 21.300000000000004,
+      layers: ["inner6"],
+    }),
+  ])
   expect(input.buses?.map((bus) => [bus.busId, bus.preferredLayer])).toEqual([
     ["DDR_BYTE0", "inner2"],
     ["DDR_BYTE1", "bottom"],

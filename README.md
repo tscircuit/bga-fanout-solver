@@ -19,22 +19,24 @@ stable fixed-target API.
 
 The `simplified-am62l-ddr-{soc,ram}-repro.srj.json` fixtures are byte-for-byte
 JSON serializations of the raw `SimpleRouteJson` arguments passed to each
-breakout `algorithmFn` by `@tscircuit/core@0.0.1739`. They were captured from
+breakout `algorithmFn` by the Core correction in
+[`tscircuit/core#3389`](https://github.com/tscircuit/core/pull/3389), commit
+`6e07fb0b`. They were captured from the latest merged
 `@tsci/0hmX.simplified-am62l-computer@1.0.15` `index.circuit.tsx` at PR #6
-commit `ddcbb51`. No adapter or solver transformation runs before capture, and
-the importer copies the validated bytes without rewriting them.
+merge commit `8063a9a`. No adapter or solver transformation runs before
+capture. The importer validates their hash and parsed shape, then writes the
+original captured byte buffers unchanged rather than reserializing them.
 
-Each raw input contains all 988 obstacles supplied by Core, including all 373
-SoC pads and all 200 RAM pads, plus the original 8-layer bounds and rules, 33
-fixed-target connections, three ordered DDR buses, target layers, and zero
-traces. The unrelated board obstacles in both per-breakout inputs document a
-current Core breakout-scoping limitation; they are intentionally retained
-rather than filtered here. The SoC call naturally fails while routing top-layer
-dogbones. A diagnostic zero-trace continuation after that failure allows Core
-to construct the otherwise unreachable raw RAM call; its monolithic
-compatibility step did not return during the 210-second capture window. Neither
-fixture is derived from `ddr-only.circuit.tsx`, minimized, or reduced to a
-single BGA.
+The SoC input contains 375 obstacles: its 373 physical pads plus two aligned
+inner-layer GND pours. The RAM input contains 202 obstacles: its 200 physical
+pads plus the same two pours clipped to the RAM breakout bounds. Both retain
+the original 8-layer rules, 33 fixed-target connections, three ordered DDR
+buses, target layers, and zero traces. The SoC call naturally fails while
+routing top-layer dogbones. A diagnostic zero-trace continuation after that
+failure allows Core to construct the otherwise unreachable raw RAM call; Core
+passes zero prior traces to that independent phase, whose monolithic
+compatibility step remains a bounded stall. Neither fixture is derived from
+`ddr-only.circuit.tsx`, minimized, or reduced to a single BGA.
 
 ## Supported problem shape
 
