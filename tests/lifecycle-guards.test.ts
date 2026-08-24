@@ -8,12 +8,22 @@ test("output is guarded and stepping a solved pipeline is a no-op", async () => 
   )
   expect(() => solver.getOutput()).toThrow("before completion")
   expect(solver.pipelineDef.map((stage) => stage.solverName)).toEqual([
-    "findFreeSpace",
+    "buildFanoutModel",
+    "sampleFreeSpaceCells",
+    "discoverFreeSpaceRegions",
+    "packFreeSpaceRegions",
     "rankFanoutNets",
-    "compatibilityRoute",
+    "initializeReferenceRouting",
+    "placeIndependentEarlyDropVias",
+    "completeTopLayerRoutes",
+    "assignPrescribedLayers",
+    "routePrescribedInnerLayers",
+    "miterRouteCorners",
+    "validateReconstructedGeometry",
+    "buildOutput",
   ])
   solver.step()
-  expect(solver.getCurrentStageName()).toBe("findFreeSpace")
+  expect(solver.getCurrentStageName()).toBe("buildFanoutModel")
   expect(() => solver.getOutput()).toThrow("before completion")
 
   solver.solve()

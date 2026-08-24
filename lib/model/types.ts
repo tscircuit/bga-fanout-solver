@@ -70,6 +70,17 @@ export type FreeSpaceAnalysis = {
   legalCellCount: number
 }
 
+export type FreeSpaceSample = {
+  model: FanoutModel
+  legalCells: FreeCell[]
+  rowCount: number
+  columnCount: number
+}
+
+export type FreeSpaceRegions = FreeSpaceSample & {
+  candidateRegions: FreeCell[][]
+}
+
 export type RankedFanoutModel = FreeSpaceAnalysis
 
 export type FixedTargetBgaFanoutOutput = {

@@ -59,8 +59,8 @@ test("exact index.circuit.tsx RAM capture preserves its bounded compatibility st
   ).toHaveLength(11)
 
   const solver = new FixedTargetBgaFanoutSolver(input)
-  solver.solveUntilStage("compatibilityRoute")
-  expect(solver.getCurrentStageName()).toBe("compatibilityRoute")
+  solver.solveUntilStage("completeTopLayerRoutes")
+  expect(solver.getCurrentStageName()).toBe("completeTopLayerRoutes")
 
   const repositoryRoot = path.resolve(import.meta.dir, "..")
   const child = Bun.spawn({

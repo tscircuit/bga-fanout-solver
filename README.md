@@ -69,18 +69,32 @@ for React Cosmos and other solver debuggers.
 
 ## Extraction status
 
-SRJ-to-model conversion is a pure synchronous setup operation and is not shown
-as a solver stage. The debugger pipeline starts with incremental free-space
-region construction, followed by incremental source ranking and the private
-compatibility route stage. The proven top/inner routing search remains in that
-single compatibility stage so this extraction preserves exact geometry while
-its mutually-dependent search phases are separated. It is not exported.
+The debugger exposes the validated fixed-target algorithm as a staged dataflow.
+Model construction, free-space sampling, region discovery, region packing, and
+source ranking all feed the same mutable reference routing model. The proven
+top and prescribed-inner searches are resumable at their real decision
+boundaries: local-via candidates, conflict comparisons, backtracking states,
+A* node pops, every neighbor accept/reject decision, route-order results, and
+route commits. The shared A* visualization marks the source and target, draws
+an intent guide, reconstructs the live predecessor path, highlights the current
+expanded node, and keeps the frontier and visited nodes visible as secondary
+context. Corner mitering advances one route per step.
 
 The visible pipeline is:
 
-1. `findFreeSpace`
-2. `rankFanoutNets`
-3. `compatibilityRoute`
+1. `buildFanoutModel`
+2. `sampleFreeSpaceCells`
+3. `discoverFreeSpaceRegions`
+4. `packFreeSpaceRegions`
+5. `rankFanoutNets`
+6. `initializeReferenceRouting`
+7. `placeIndependentEarlyDropVias`
+8. `completeTopLayerRoutes`
+9. `assignPrescribedLayers`
+10. `routePrescribedInnerLayers`
+11. `miterRouteCorners`
+12. `validateReconstructedGeometry`
+13. `buildOutput`
 
 ## Development
 

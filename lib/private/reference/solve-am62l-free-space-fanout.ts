@@ -10,6 +10,7 @@ import type {
 import { AM62L_FREE_SPACE_FANOUT_PHASES } from "./am62l-free-space-fanout"
 import type { InProcessAutorouterResult } from "./create-in-process-autorouter"
 import { squaredDistance } from "./squared-distance"
+import type { RankedFanoutModel } from "../../model/types"
 
 type Point = { x: number; y: number }
 type Segment = { a: Point; b: Point }
@@ -359,6 +360,9 @@ class MinHeap<T extends { score: number }> {
     }
     this.items[index] = item
   }
+  snapshot(limit = 128): T[] {
+    return this.items.slice(0, limit)
+  }
   pop(): T | undefined {
     const first = this.items[0]
     const last = this.items.pop()
@@ -398,6 +402,52 @@ const reportPhase = (
     steps: phaseIndex + 1,
     progress: (phaseIndex + 1) / AM62L_FREE_SPACE_FANOUT_PHASES.length,
   })
+}
+
+type SearchClock = { now: () => number }
+const wallClock: SearchClock = { now: () => Date.now() }
+
+class ActiveComputeClock implements SearchClock {
+  private elapsedMs = 0
+  private stepStartedAt: number | null = null
+
+  beginStep() {
+    this.stepStartedAt = performance.now()
+  }
+
+  endStep() {
+    if (this.stepStartedAt === null) return
+    this.elapsedMs += performance.now() - this.stepStartedAt
+    this.stepStartedAt = null
+  }
+
+  now() {
+    return (
+      this.elapsedMs +
+      (this.stepStartedAt === null ? 0 : performance.now() - this.stepStartedAt)
+    )
+  }
+}
+
+export type ReferenceSearchStep = {
+  action: string
+  status: "candidate" | "accepted" | "rejected" | "completed"
+  connectionName?: string
+  candidateId?: string
+  reason?: string
+  processed?: number
+  total?: number
+  point?: Point
+  expandedPoint?: Point
+  searchStart?: Point
+  searchTarget?: Point
+  candidatePath?: Point[]
+  layer?: string
+  route?: ReferenceRouteSnapshot
+  frontierPoints?: Point[]
+  visitedPoints?: Point[]
+  frontierSize?: number
+  visitedCount?: number
 }
 
 const uniqueSorted = (values: readonly number[]) =>
@@ -1037,17 +1087,36 @@ const numberByFreeSpaceDistance = (model: GeometryModel) => {
   }
 }
 
-const assignEarlyDrops = (model: GeometryModel) => {
-  const assignmentDeadline = Date.now() + 30_000
-  const hasAssignmentBudget = () => Date.now() < assignmentDeadline
+const snapshotRoutedNet = (route: RoutedNet): ReferenceRouteSnapshot => ({
+  connectionName: route.connectionName,
+  selectedLayer: route.selectedLayer,
+  source: { ...route.source },
+  target: { ...route.target },
+  topPath: route.topPath.map((point) => ({ ...point })),
+  via: { ...route.via },
+  innerPath: route.innerPath.map((point) => ({ ...point })),
+  kind: route.kind,
+})
+
+const assignEarlyDropsSteps = function* (
+  model: GeometryModel,
+  clock: SearchClock = wallClock,
+): Generator<ReferenceSearchStep, void> {
+  const assignmentDeadline = clock.now() + 30_000
+  const hasAssignmentBudget = () => clock.now() < assignmentDeadline
   const maximumReach = Math.max(model.pitchX, model.pitchY) * 2.52
-  const enumerateLocalDrops = (
+  const enumerateLocalDrops = function* (
     net: FanoutNet,
     accepted: RoutedNet[],
     limit = 1,
     reach = maximumReach,
     includeBoundarySites = true,
-  ) => {
+  ): Generator<ReferenceSearchStep, RoutedNet[]> {
+    yield {
+      action: "prepare_early_drop_candidate_pool",
+      status: "candidate",
+      connectionName: net.connectionName,
+    }
     const minimumSourceY = Math.min(
       ...model.nets.map((route) => route.source.y),
     )
@@ -1122,35 +1191,108 @@ const assignEarlyDrops = (model: GeometryModel) => {
           first.cell.row - second.cell.row ||
           first.cell.column - second.cell.column,
       )
+    yield {
+      action: "rank_early_drop_candidate_pool",
+      status: "completed",
+      connectionName: net.connectionName,
+      processed: candidates.length,
+      total: candidates.length,
+    }
     const selected: RoutedNet[] = []
     const signatures = new Set<string>()
+    let processedCandidates = 0
     for (const { cell, distance: candidateDistance } of candidates) {
       if (!hasAssignmentBudget()) break
       if (candidateDistance > reach + EPS) break
       for (const path of octilinearCandidates(net.source, cell)) {
-        if (!topPathIsLegal(model, net, path, cell, accepted)) continue
-        const signature = `${pointKey(cell)}:${path.map((point) => pointKey(point)).join(";")}`
-        if (signatures.has(signature)) continue
-        signatures.add(signature)
-        selected.push({
+        processedCandidates++
+        const candidateRoute: RoutedNet = {
           ...net,
           topPath: path,
           via: { x: cell.x, y: cell.y },
           innerPath: [],
           kind: "early",
           regionId: cell.regionId,
-        })
-        if (selected.length >= limit) return selected
+        }
+        if (!topPathIsLegal(model, net, path, cell, accepted)) {
+          yield {
+            action: "evaluate_early_drop_candidate",
+            status: "rejected",
+            connectionName: net.connectionName,
+            candidateId: `${pointKey(cell)}:${processedCandidates}`,
+            reason: "top_geometry_conflict",
+            processed: processedCandidates,
+            point: { x: cell.x, y: cell.y },
+            route: snapshotRoutedNet(candidateRoute),
+          }
+          continue
+        }
+        const signature = `${pointKey(cell)}:${path.map((point) => pointKey(point)).join(";")}`
+        if (signatures.has(signature)) {
+          yield {
+            action: "evaluate_early_drop_candidate",
+            status: "rejected",
+            connectionName: net.connectionName,
+            candidateId: signature,
+            reason: "duplicate_candidate",
+            processed: processedCandidates,
+            point: { x: cell.x, y: cell.y },
+            route: snapshotRoutedNet(candidateRoute),
+          }
+          continue
+        }
+        signatures.add(signature)
+        selected.push(candidateRoute)
+        yield {
+          action: "evaluate_early_drop_candidate",
+          status: "accepted",
+          connectionName: net.connectionName,
+          candidateId: signature,
+          processed: processedCandidates,
+          point: { x: cell.x, y: cell.y },
+          route: snapshotRoutedNet(candidateRoute),
+        }
+        if (selected.length >= limit) {
+          yield {
+            action: "complete_early_drop_enumeration",
+            status: "accepted",
+            connectionName: net.connectionName,
+            candidateId: signature,
+            processed: processedCandidates,
+            total: candidates.length,
+            point: { ...candidateRoute.via },
+            route: snapshotRoutedNet(candidateRoute),
+          }
+          return selected
+        }
       }
+    }
+    yield {
+      action: "complete_early_drop_enumeration",
+      status: selected.length > 0 ? "accepted" : "rejected",
+      connectionName: net.connectionName,
+      reason: selected.length > 0 ? undefined : "no_legal_local_drop",
+      processed: processedCandidates,
+      total: candidates.length,
+      point: selected.at(-1)?.via,
+      route: selected.at(-1) ? snapshotRoutedNet(selected.at(-1)!) : undefined,
     }
     return selected
   }
-  const assignOne = (
+  const assignOne = function* (
     net: FanoutNet,
     accepted: RoutedNet[],
     includeBoundarySites = true,
-  ) =>
-    enumerateLocalDrops(net, accepted, 1, maximumReach, includeBoundarySites)[0]
+  ): Generator<ReferenceSearchStep, RoutedNet | undefined> {
+    const candidates = yield* enumerateLocalDrops(
+      net,
+      accepted,
+      1,
+      maximumReach,
+      includeBoundarySites,
+    )
+    return candidates[0]
+  }
   const getTopologyPenalty = (routes: RoutedNet[]) => {
     let penalty = 0
     for (const layer of new Set(routes.map((route) => route.selectedLayer))) {
@@ -1271,20 +1413,21 @@ const assignEarlyDrops = (model: GeometryModel) => {
       (net.rank * Math.min(model.pitchX, model.pitchY)) / 2 +
         Math.max(model.pitchX, model.pitchY),
     )
-  const requiredCandidateMap = new Map(
-    requiredBoundaryNets.map((net) => [
+  const requiredCandidateMap = new Map<string, RoutedNet[]>()
+  for (const net of requiredBoundaryNets) {
+    requiredCandidateMap.set(
       net.connectionName,
-      enumerateLocalDrops(net, [], 12, extendedLocalReach(net)),
-    ]),
-  )
+      yield* enumerateLocalDrops(net, [], 12, extendedLocalReach(net)),
+    )
+  }
   const localRoutesConflict = (first: RoutedNet, second: RoutedNet) =>
     !topPathIsLegal(model, first, first.topPath, first.via, [second]) ||
     !topPathIsLegal(model, second, second.topPath, second.via, [first])
   let conflictClosureAttempts = 0
-  const repairBoundaryLocalDrops = (
+  const repairBoundaryLocalDrops = function* (
     accepted: RoutedNet[],
     fillOrder: FanoutNet[],
-  ) => {
+  ): Generator<ReferenceSearchStep, void> {
     if (
       !hasAssignmentBudget() ||
       requiredBoundaryNets.length === 0 ||
@@ -1327,7 +1470,7 @@ const assignEarlyDrops = (model: GeometryModel) => {
       if (!hasAssignmentBudget()) return
       candidateMap.set(
         net.connectionName,
-        enumerateLocalDrops(
+        yield* enumerateLocalDrops(
           net,
           frozen,
           requiredNames.has(net.connectionName) ? 8 : 12,
@@ -1362,12 +1505,28 @@ const assignEarlyDrops = (model: GeometryModel) => {
         secondIndex++
       ) {
         const second = allCandidates[secondIndex]!
+        let conflict = false
         if (
           first.connectionName !== second.connectionName &&
           localRoutesConflict(first, second)
         ) {
+          conflict = true
           conflictBits[firstIndex]![secondIndex] = 1
           conflictBits[secondIndex]![firstIndex] = 1
+        }
+        yield {
+          action: "compare_early_drop_candidates",
+          status: conflict ? "rejected" : "accepted",
+          connectionName: first.connectionName,
+          candidateId: `${firstIndex}:${secondIndex}`,
+          reason: conflict
+            ? `conflicts_with:${second.connectionName}`
+            : undefined,
+          processed:
+            firstIndex * allCandidates.length + secondIndex - firstIndex,
+          total: allCandidates.length * allCandidates.length,
+          point: { ...first.via },
+          route: snapshotRoutedNet(first),
         }
       }
     }
@@ -1379,9 +1538,9 @@ const assignEarlyDrops = (model: GeometryModel) => {
         : conflictBits[firstIndex]![secondIndex] === 1
     }
     let exploredStates = 0
-    const searchDeadline = Math.min(assignmentDeadline, Date.now() + 8_000)
+    const searchDeadline = Math.min(assignmentDeadline, clock.now() + 8_000)
     const searchBudgetAvailable = () =>
-      exploredStates < 32_768 && Date.now() < searchDeadline
+      exploredStates < 32_768 && clock.now() < searchDeadline
     let solution: RoutedNet[] | undefined
     const viableCandidates = (remaining: FanoutNet[], selected: RoutedNet[]) =>
       remaining
@@ -1398,8 +1557,18 @@ const assignEarlyDrops = (model: GeometryModel) => {
             first.candidates.length - second.candidates.length ||
             second.net.rank - first.net.rank,
         )
-    const searchOptional = (remaining: FanoutNet[], selected: RoutedNet[]) => {
+    const searchOptional = function* (
+      remaining: FanoutNet[],
+      selected: RoutedNet[],
+    ): Generator<ReferenceSearchStep, void> {
       exploredStates++
+      yield {
+        action: "search_optional_early_drop_set",
+        status: "candidate",
+        connectionName: remaining[0]?.connectionName,
+        processed: exploredStates,
+        total: 32_768,
+      }
       if (!searchBudgetAvailable()) return
       if (!solution || selected.length > solution.length) {
         solution = selected
@@ -1415,15 +1584,25 @@ const assignEarlyDrops = (model: GeometryModel) => {
         (net) => net.connectionName !== next.net.connectionName,
       )
       for (const candidate of next.candidates) {
-        searchOptional(rest, [...selected, candidate])
+        yield* searchOptional(rest, [...selected, candidate])
       }
-      searchOptional(rest, selected)
+      yield* searchOptional(rest, selected)
     }
-    const searchRequired = (remaining: FanoutNet[], selected: RoutedNet[]) => {
+    const searchRequired = function* (
+      remaining: FanoutNet[],
+      selected: RoutedNet[],
+    ): Generator<ReferenceSearchStep, void> {
       exploredStates++
+      yield {
+        action: "search_required_early_drop_set",
+        status: "candidate",
+        connectionName: remaining[0]?.connectionName,
+        processed: exploredStates,
+        total: 32_768,
+      }
       if (!searchBudgetAvailable()) return
       if (remaining.length === 0) {
-        searchOptional(optionalVariableNets, selected)
+        yield* searchOptional(optionalVariableNets, selected)
         return
       }
       const next = viableCandidates(remaining, selected)[0]!
@@ -1432,16 +1611,16 @@ const assignEarlyDrops = (model: GeometryModel) => {
         (net) => net.connectionName !== next.net.connectionName,
       )
       for (const candidate of next.candidates) {
-        searchRequired(rest, [...selected, candidate])
+        yield* searchRequired(rest, [...selected, candidate])
       }
     }
-    searchRequired(requiredVariableNets, [])
+    yield* searchRequired(requiredVariableNets, [])
     if (!solution) return
     const repaired = [...frozen, ...solution]
     const repairedNames = new Set(repaired.map((route) => route.connectionName))
     for (const net of fillOrder) {
       if (repairedNames.has(net.connectionName)) continue
-      const selected = assignOne(net, repaired)
+      const selected = yield* assignOne(net, repaired)
       if (!selected) continue
       repaired.push(selected)
       repairedNames.add(net.connectionName)
@@ -1506,15 +1685,22 @@ const assignEarlyDrops = (model: GeometryModel) => {
       ...seededOrders(baseOrder, 16, 0x62a10ea1),
     ].map((order) => ({ order, includeBoundarySites: false })),
   ]
-  for (const { order, includeBoundarySites } of routePlans) {
+  for (let planIndex = 0; planIndex < routePlans.length; planIndex++) {
+    const { order, includeBoundarySites } = routePlans[planIndex]!
     if (!hasAssignmentBudget()) break
     const accepted: RoutedNet[] = []
     for (const net of order) {
-      const selected = assignOne(net, accepted, includeBoundarySites)
+      const selected = yield* assignOne(net, accepted, includeBoundarySites)
       if (selected) accepted.push(selected)
     }
-    repairBoundaryLocalDrops(accepted, order)
+    yield* repairBoundaryLocalDrops(accepted, order)
     registerCandidate(accepted)
+    yield {
+      action: "complete_early_drop_plan",
+      status: "completed",
+      processed: planIndex + 1,
+      total: routePlans.length,
+    }
     for (let removedIndex = 0; removedIndex < accepted.length; removedIndex++) {
       registerCandidate(accepted.filter((_, index) => index !== removedIndex))
     }
@@ -1539,17 +1725,15 @@ const assignEarlyDrops = (model: GeometryModel) => {
   model.routes = [...(model.earlyRouteCandidates[0] ?? [])]
 }
 
+const assignEarlyDrops = (model: GeometryModel) => {
+  for (const _step of assignEarlyDropsSteps(model)) {
+    // Drain the same incremental implementation for legacy synchronous calls.
+  }
+}
+
 type GraphPoint = Point & { xi: number; yi: number }
 
-const findGridPath = ({
-  xs,
-  ys,
-  starts,
-  isGoal,
-  pointAllowed,
-  segmentAllowed,
-  heuristic,
-}: {
+type FindGridPathParams = {
   xs: number[]
   ys: number[]
   starts: Array<{ point: GraphPoint; initialCost: number }>
@@ -1557,7 +1741,26 @@ const findGridPath = ({
   pointAllowed: (point: GraphPoint) => boolean
   segmentAllowed: (a: GraphPoint, b: GraphPoint) => boolean
   heuristic: (point: GraphPoint) => number
-}): Point[] | null => {
+  visualization: {
+    actionScope: "top_layer" | "inner_layer"
+    connectionName?: string
+    layer: string
+    startPoint: Point
+    targetPoint: Point
+    pathPrefix?: Point[]
+  }
+}
+
+const findGridPathSteps = function* ({
+  xs,
+  ys,
+  starts,
+  isGoal,
+  pointAllowed,
+  segmentAllowed,
+  heuristic,
+  visualization,
+}: FindGridPathParams): Generator<ReferenceSearchStep, Point[] | null> {
   const width = xs.length
   const height = ys.length
   const nodeAt = (xi: number, yi: number) => yi * width + xi
@@ -1581,12 +1784,46 @@ const findGridPath = ({
     heap.push({ node, score: start.initialCost + heuristic(start.point) })
   }
   let goalNode = -1
+  const visitedPoints: Point[] = []
+  const pathToNode = (node: number) => {
+    const reverse: Point[] = []
+    for (let cursor = node; cursor >= 0; cursor = previous[cursor]!) {
+      const point = pointFor(cursor)
+      reverse.push({ x: point.x, y: point.y })
+    }
+    return [...(visualization.pathPrefix ?? []), ...reverse.reverse()]
+  }
+  const searchState = (candidateNode: number, expandedNode: number) => ({
+    frontierPoints: heap
+      .snapshot()
+      .map((frontierItem) => pointFor(frontierItem.node)),
+    visitedPoints: visitedPoints.slice(-256),
+    frontierSize: heap.length,
+    visitedCount: visitedPoints.length,
+    expandedPoint: pointFor(expandedNode),
+    searchStart: visualization.startPoint,
+    searchTarget: visualization.targetPoint,
+    candidatePath: pathToNode(candidateNode),
+    layer: visualization.layer,
+  })
   while (heap.length) {
     const item = heap.pop()!
     if (closed[item.node]) continue
     const point = pointFor(item.node)
     closed[item.node] = 1
-    if (isGoal(point)) {
+    visitedPoints.push({ x: point.x, y: point.y })
+    const goal = isGoal(point)
+    yield {
+      action: `pop_${visualization.actionScope}_grid_node`,
+      status: goal ? "accepted" : "candidate",
+      connectionName: visualization.connectionName,
+      candidateId: `${point.x},${point.y}`,
+      processed: visitedPoints.length,
+      total: width * height,
+      point: { x: point.x, y: point.y },
+      ...searchState(item.node, item.node),
+    }
+    if (goal) {
       goalNode = item.node
       break
     }
@@ -1602,17 +1839,92 @@ const findGridPath = ({
     ] as const) {
       const xi = point.xi + dx
       const yi = point.yi + dy
-      if (xi < 0 || yi < 0 || xi >= width || yi >= height) continue
+      if (xi < 0 || yi < 0 || xi >= width || yi >= height) {
+        yield {
+          action: `evaluate_${visualization.actionScope}_neighbor`,
+          status: "rejected",
+          connectionName: visualization.connectionName,
+          candidateId: `${xi},${yi}`,
+          reason: "outside_search_grid",
+          point: { x: point.x, y: point.y },
+          ...searchState(item.node, item.node),
+        }
+        continue
+      }
       const nextNode = nodeAt(xi, yi)
-      if (closed[nextNode]) continue
       const next = pointFor(nextNode)
-      if (!isOctilinear(point, next)) continue
-      if (!pointAllowed(next) || !segmentAllowed(point, next)) continue
+      if (closed[nextNode]) {
+        yield {
+          action: `evaluate_${visualization.actionScope}_neighbor`,
+          status: "rejected",
+          connectionName: visualization.connectionName,
+          candidateId: `${next.x},${next.y}`,
+          reason: "already_visited",
+          point: { x: next.x, y: next.y },
+          ...searchState(item.node, item.node),
+        }
+        continue
+      }
+      if (!isOctilinear(point, next)) {
+        yield {
+          action: `evaluate_${visualization.actionScope}_neighbor`,
+          status: "rejected",
+          connectionName: visualization.connectionName,
+          candidateId: `${next.x},${next.y}`,
+          reason: "non_octilinear_edge",
+          point: { x: next.x, y: next.y },
+          ...searchState(item.node, item.node),
+        }
+        continue
+      }
+      if (!pointAllowed(next)) {
+        yield {
+          action: `evaluate_${visualization.actionScope}_neighbor`,
+          status: "rejected",
+          connectionName: visualization.connectionName,
+          candidateId: `${next.x},${next.y}`,
+          reason: "node_clearance",
+          point: { x: next.x, y: next.y },
+          ...searchState(item.node, item.node),
+        }
+        continue
+      }
+      if (!segmentAllowed(point, next)) {
+        yield {
+          action: `evaluate_${visualization.actionScope}_neighbor`,
+          status: "rejected",
+          connectionName: visualization.connectionName,
+          candidateId: `${next.x},${next.y}`,
+          reason: "edge_clearance",
+          point: { x: next.x, y: next.y },
+          ...searchState(item.node, item.node),
+        }
+        continue
+      }
       const cost = scores[item.node]! + distance(point, next)
-      if (cost + EPS >= scores[nextNode]!) continue
+      if (cost + EPS >= scores[nextNode]!) {
+        yield {
+          action: `evaluate_${visualization.actionScope}_neighbor`,
+          status: "rejected",
+          connectionName: visualization.connectionName,
+          candidateId: `${next.x},${next.y}`,
+          reason: "no_lower_cost",
+          point: { x: next.x, y: next.y },
+          ...searchState(item.node, item.node),
+        }
+        continue
+      }
       scores[nextNode] = cost
       previous[nextNode] = item.node
       heap.push({ node: nextNode, score: cost + heuristic(next) })
+      yield {
+        action: `evaluate_${visualization.actionScope}_neighbor`,
+        status: "accepted",
+        connectionName: visualization.connectionName,
+        candidateId: `${next.x},${next.y}`,
+        point: { x: next.x, y: next.y },
+        ...searchState(nextNode, item.node),
+      }
     }
   }
   if (goalNode < 0) return null
@@ -1623,7 +1935,9 @@ const findGridPath = ({
   return simplifyPath(reverse.reverse())
 }
 
-const routeResidualTopDogbones = (model: GeometryModel) => {
+const routeResidualTopDogbonesSteps = function* (
+  model: GeometryModel,
+): Generator<ReferenceSearchStep, void> {
   let lastViaLineError: unknown
   const acceptCompleteCandidate = (routes: RoutedNet[]) => {
     const trialModel: GeometryModel = {
@@ -1712,13 +2026,32 @@ const routeResidualTopDogbones = (model: GeometryModel) => {
   let bestResidualCount = 0
   let bestSolved: RoutedNet[] = []
 
-  for (const earlyRoutes of earlyCandidates) {
+  for (
+    let earlyCandidateIndex = 0;
+    earlyCandidateIndex < earlyCandidates.length;
+    earlyCandidateIndex++
+  ) {
+    const earlyRoutes = earlyCandidates[earlyCandidateIndex]!
+    yield {
+      action: "evaluate_early_route_set",
+      status: "candidate",
+      candidateId: `early-set-${earlyCandidateIndex}`,
+      processed: earlyCandidateIndex + 1,
+      total: earlyCandidates.length,
+    }
     const earlyNames = new Set(earlyRoutes.map((route) => route.connectionName))
     const residual = model.nets.filter(
       (net) => !earlyNames.has(net.connectionName),
     )
     if (residual.length === 0) {
-      if (acceptCompleteCandidate([...earlyRoutes])) return
+      const accepted = acceptCompleteCandidate([...earlyRoutes])
+      yield {
+        action: "commit_complete_topology",
+        status: accepted ? "accepted" : "rejected",
+        candidateId: `early-set-${earlyCandidateIndex}`,
+        reason: accepted ? undefined : "reconstructed_geometry_conflict",
+      }
+      if (accepted) return
       continue
     }
 
@@ -1748,12 +2081,12 @@ const routeResidualTopDogbones = (model: GeometryModel) => {
     ys.push(...residual.map((net) => Q(net.source.y)))
     ys.splice(0, ys.length, ...uniqueSorted(ys))
 
-    const routeOne = (
+    const routeOne = function* (
       net: FanoutNet,
       accepted: RoutedNet[],
       portalOrderSeed: number,
       preferredPortalY?: number,
-    ): RoutedNet | null => {
+    ): Generator<ReferenceSearchStep, RoutedNet | null> {
       const ownPad = getOwnPad(model, net)
       if (!ownPad) return null
       const fixedSegments = accepted.flatMap((route) =>
@@ -1896,7 +2229,7 @@ const routeResidualTopDogbones = (model: GeometryModel) => {
             : portalOrderSeed > 0
               ? portalCandidates[0]
               : undefined
-      const path = findGridPath({
+      const path = yield* findGridPathSteps({
         xs,
         ys,
         starts,
@@ -1916,15 +2249,39 @@ const routeResidualTopDogbones = (model: GeometryModel) => {
           point.x +
           (preferredPortal ? Math.abs(preferredPortal.y - point.y) * 0.8 : 0) +
           Math.max(0, minimumSourceX - point.x) * 0.2,
+        visualization: {
+          actionScope: "top_layer",
+          connectionName: net.connectionName,
+          layer: "top",
+          startPoint: net.source,
+          targetPoint: net.target,
+          pathPrefix: [net.source],
+        },
       })
-      if (!path) return null
-      return {
+      if (!path) {
+        yield {
+          action: "route_top_layer_connection",
+          status: "rejected",
+          connectionName: net.connectionName,
+          reason: "no_legal_grid_path",
+        }
+        return null
+      }
+      const routed: RoutedNet = {
         ...net,
         topPath: simplifyPath([net.source, ...path]),
         via: { x: Number.NaN, y: Number.NaN },
         innerPath: [],
         kind: "residual",
       }
+      yield {
+        action: "route_top_layer_connection",
+        status: "accepted",
+        connectionName: net.connectionName,
+        point: routed.topPath.at(-1),
+        route: snapshotRoutedNet(routed),
+      }
+      return routed
     }
 
     const atomicGroups: FanoutNet[][] = []
@@ -2000,10 +2357,10 @@ const routeResidualTopDogbones = (model: GeometryModel) => {
         model.rules.traceWidth / 2 + model.rules.traceToPadClearance
       )
     })
-    const solveAtomicGroup = (
+    const solveAtomicGroup = function* (
       group: FanoutNet[],
       accepted: RoutedNet[],
-    ): RoutedNet[][] => {
+    ): Generator<ReferenceSearchStep, RoutedNet[][]> {
       const groupCenterY =
         group.reduce((sum, route) => sum + route.source.y, 0) / group.length
       const packageCenterY = (model.padBounds.minY + model.padBounds.maxY) / 2
@@ -2046,7 +2403,7 @@ const routeResidualTopDogbones = (model: GeometryModel) => {
             const trialAccepted = [...accepted]
             const solved: RoutedNet[] = []
             for (const route of order) {
-              const routed = routeOne(
+              const routed = yield* routeOne(
                 route,
                 trialAccepted,
                 -1,
@@ -2103,10 +2460,10 @@ const routeResidualTopDogbones = (model: GeometryModel) => {
           first[0]!.source.y - second[0]!.source.y ||
           first[0]!.busId.localeCompare(second[0]!.busId),
       )
-    const solveBoundaryGroup = (
+    const solveBoundaryGroup = function* (
       group: FanoutNet[],
       accepted: RoutedNet[],
-    ): RoutedNet[][] => {
+    ): Generator<ReferenceSearchStep, RoutedNet[][]> {
       const centerY =
         group.reduce((sum, route) => sum + route.source.y, 0) / group.length
       const packageCenterY = (model.padBounds.minY + model.padBounds.maxY) / 2
@@ -2117,12 +2474,12 @@ const routeResidualTopDogbones = (model: GeometryModel) => {
       )
       const solutions: RoutedNet[][] = []
       let exploredAssignments = 0
-      const assignOrderedPortals = (
+      const assignOrderedPortals = function* (
         routeIndex: number,
         previousPortalY: number | undefined,
         trialAccepted: RoutedNet[],
         solved: RoutedNet[],
-      ) => {
+      ): Generator<ReferenceSearchStep, void> {
         if (solutions.length >= 4 || ++exploredAssignments > 256) return
         if (routeIndex === depthOrder.length) {
           solutions.push(solved)
@@ -2148,9 +2505,9 @@ const routeResidualTopDogbones = (model: GeometryModel) => {
           )
           .slice(0, 16)
         for (const lane of candidates) {
-          const routed = routeOne(route, trialAccepted, -1, lane)
+          const routed = yield* routeOne(route, trialAccepted, -1, lane)
           if (!routed) continue
-          assignOrderedPortals(
+          yield* assignOrderedPortals(
             routeIndex + 1,
             lane,
             [...trialAccepted, routed],
@@ -2159,7 +2516,7 @@ const routeResidualTopDogbones = (model: GeometryModel) => {
           if (solutions.length >= 4) return
         }
       }
-      assignOrderedPortals(0, undefined, [...accepted], [])
+      yield* assignOrderedPortals(0, undefined, [...accepted], [])
       return solutions
     }
     if (boundaryGroups.length > 0) {
@@ -2172,10 +2529,10 @@ const routeResidualTopDogbones = (model: GeometryModel) => {
         (route) => !boundaryNames.has(route.connectionName),
       )
       let exploredBoundaryStates = 0
-      const fillInterior = (
+      const fillInterior = function* (
         accepted: RoutedNet[],
         boundarySolved: RoutedNet[],
-      ): RoutedNet[] | null => {
+      ): Generator<ReferenceSearchStep, RoutedNet[] | null> {
         const orders = [
           [...interior].sort(
             (first, second) =>
@@ -2191,7 +2548,7 @@ const routeResidualTopDogbones = (model: GeometryModel) => {
           const trialAccepted = [...accepted]
           const solved = [...boundarySolved]
           for (const route of orders[orderIndex]!) {
-            const routed = routeOne(
+            const routed = yield* routeOne(
               route,
               trialAccepted,
               orderIndex === 0 ? 0 : orderIndex,
@@ -2204,21 +2561,27 @@ const routeResidualTopDogbones = (model: GeometryModel) => {
         }
         return null
       }
-      const searchBoundaryGroups = (
+      const searchBoundaryGroups = function* (
         groupIndex: number,
         accepted: RoutedNet[],
         solved: RoutedNet[],
-      ): RoutedNet[] | null => {
+      ): Generator<ReferenceSearchStep, RoutedNet[] | null> {
         if (++exploredBoundaryStates > 32) return null
-        if (groupIndex === boundaryGroups.length) {
-          return fillInterior(accepted, solved)
+        yield {
+          action: "search_boundary_group",
+          status: "candidate",
+          processed: exploredBoundaryStates,
+          total: 32,
         }
-        const groupSolutions = solveBoundaryGroup(
+        if (groupIndex === boundaryGroups.length) {
+          return yield* fillInterior(accepted, solved)
+        }
+        const groupSolutions = yield* solveBoundaryGroup(
           boundaryGroups[groupIndex]!,
           accepted,
         )
         for (const groupSolution of groupSolutions) {
-          const result = searchBoundaryGroups(
+          const result = yield* searchBoundaryGroups(
             groupIndex + 1,
             [...accepted, ...groupSolution],
             [...solved, ...groupSolution],
@@ -2227,9 +2590,23 @@ const routeResidualTopDogbones = (model: GeometryModel) => {
         }
         return null
       }
-      const boundarySolution = searchBoundaryGroups(0, [...earlyRoutes], [])
+      const boundarySolution = yield* searchBoundaryGroups(
+        0,
+        [...earlyRoutes],
+        [],
+      )
       if (boundarySolution?.length === residual.length) {
-        if (acceptCompleteCandidate([...earlyRoutes, ...boundarySolution])) {
+        const accepted = acceptCompleteCandidate([
+          ...earlyRoutes,
+          ...boundarySolution,
+        ])
+        yield {
+          action: "commit_complete_topology",
+          status: accepted ? "accepted" : "rejected",
+          candidateId: `boundary-solution-${earlyCandidateIndex}`,
+          reason: accepted ? undefined : "reconstructed_geometry_conflict",
+        }
+        if (accepted) {
           return
         }
       }
@@ -2327,11 +2704,17 @@ const routeResidualTopDogbones = (model: GeometryModel) => {
         { order, portalSeed: orderIndex + 1, portalTargets: undefined },
       ]),
     ]
-    for (const { order, portalSeed, portalTargets } of routeAttempts) {
+    for (
+      let routeAttemptIndex = 0;
+      routeAttemptIndex < routeAttempts.length;
+      routeAttemptIndex++
+    ) {
+      const { order, portalSeed, portalTargets } =
+        routeAttempts[routeAttemptIndex]!
       const accepted = [...earlyRoutes]
       const solved: RoutedNet[] = []
       for (const net of order) {
-        const route = routeOne(
+        const route = yield* routeOne(
           net,
           accepted,
           portalSeed,
@@ -2340,6 +2723,16 @@ const routeResidualTopDogbones = (model: GeometryModel) => {
         if (!route) continue
         accepted.push(route)
         solved.push(route)
+      }
+      yield {
+        action: "complete_top_route_attempt",
+        status: solved.length === residual.length ? "accepted" : "rejected",
+        processed: routeAttemptIndex + 1,
+        total: routeAttempts.length,
+        reason:
+          solved.length === residual.length
+            ? undefined
+            : `routed_${solved.length}_of_${residual.length}`,
       }
       if (solved.length > bestForCandidate.length) bestForCandidate = solved
       if (bestForCandidate.length === residual.length) break
@@ -2370,10 +2763,10 @@ const routeResidualTopDogbones = (model: GeometryModel) => {
         (route) => !repairNames.has(route.connectionName),
       )
       let exploredRepairStates = 0
-      const fillUncoupled = (
+      const fillUncoupled = function* (
         accepted: RoutedNet[],
         atomicSolved: RoutedNet[],
-      ): RoutedNet[] | null => {
+      ): Generator<ReferenceSearchStep, RoutedNet[] | null> {
         const orders = [
           [...uncoupled].sort(
             (first, second) =>
@@ -2391,7 +2784,7 @@ const routeResidualTopDogbones = (model: GeometryModel) => {
           const trialAccepted = [...accepted]
           const solved = [...atomicSolved]
           for (const route of orders[orderIndex]!) {
-            const routed = routeOne(
+            const routed = yield* routeOne(
               route,
               trialAccepted,
               orderIndex === 0 ? 0 : orderIndex,
@@ -2407,21 +2800,27 @@ const routeResidualTopDogbones = (model: GeometryModel) => {
         }
         return null
       }
-      const searchRepairGroups = (
+      const searchRepairGroups = function* (
         groupIndex: number,
         accepted: RoutedNet[],
         solved: RoutedNet[],
-      ): RoutedNet[] | null => {
+      ): Generator<ReferenceSearchStep, RoutedNet[] | null> {
         if (++exploredRepairStates > 32) return null
-        if (groupIndex === repairGroups.length) {
-          return fillUncoupled(accepted, solved)
+        yield {
+          action: "search_atomic_repair_group",
+          status: "candidate",
+          processed: exploredRepairStates,
+          total: 32,
         }
-        const groupSolutions = solveAtomicGroup(
+        if (groupIndex === repairGroups.length) {
+          return yield* fillUncoupled(accepted, solved)
+        }
+        const groupSolutions = yield* solveAtomicGroup(
           repairGroups[groupIndex]!,
           accepted,
         )
         for (const groupSolution of groupSolutions) {
-          const result = searchRepairGroups(
+          const result = yield* searchRepairGroups(
             groupIndex + 1,
             [...accepted, ...groupSolution],
             [...solved, ...groupSolution],
@@ -2430,9 +2829,16 @@ const routeResidualTopDogbones = (model: GeometryModel) => {
         }
         return null
       }
-      const repaired = searchRepairGroups(0, [...earlyRoutes], [])
+      const repaired = yield* searchRepairGroups(0, [...earlyRoutes], [])
       if (repaired?.length === residual.length) {
-        if (acceptCompleteCandidate([...earlyRoutes, ...repaired])) return
+        const accepted = acceptCompleteCandidate([...earlyRoutes, ...repaired])
+        yield {
+          action: "commit_complete_topology",
+          status: accepted ? "accepted" : "rejected",
+          candidateId: `repair-solution-${earlyCandidateIndex}`,
+          reason: accepted ? undefined : "reconstructed_geometry_conflict",
+        }
+        if (accepted) return
       }
     }
     const total = earlyRoutes.length + bestForCandidate.length
@@ -2442,7 +2848,17 @@ const routeResidualTopDogbones = (model: GeometryModel) => {
       bestSolved = [...earlyRoutes, ...bestForCandidate]
     }
     if (bestForCandidate.length === residual.length) {
-      if (acceptCompleteCandidate([...earlyRoutes, ...bestForCandidate])) {
+      const accepted = acceptCompleteCandidate([
+        ...earlyRoutes,
+        ...bestForCandidate,
+      ])
+      yield {
+        action: "commit_complete_topology",
+        status: accepted ? "accepted" : "rejected",
+        candidateId: `best-solution-${earlyCandidateIndex}`,
+        reason: accepted ? undefined : "reconstructed_geometry_conflict",
+      }
+      if (accepted) {
         return
       }
     }
@@ -2498,6 +2914,13 @@ const routeResidualTopDogbones = (model: GeometryModel) => {
       ")",
   )
 }
+
+const routeResidualTopDogbones = (model: GeometryModel) => {
+  for (const _step of routeResidualTopDogbonesSteps(model)) {
+    // Drain the same incremental implementation for legacy synchronous calls.
+  }
+}
+
 const chunkSizes = (count: number) => {
   if (count < 2) return []
   const sizes: number[] = []
@@ -2918,7 +3341,9 @@ const seededOrders = function* <T>(
   }
 }
 
-const routeInnerLayers = (model: GeometryModel) => {
+const routeInnerLayersSteps = function* (
+  model: GeometryModel,
+): Generator<ReferenceSearchStep, void> {
   const routedLayers = [
     ...new Set(model.routes.map((route) => route.selectedLayer)),
   ]
@@ -2928,16 +3353,42 @@ const routeInnerLayers = (model: GeometryModel) => {
     )
     if (layer === "top") {
       for (const route of layerRoutes) {
-        const extension = octilinearCandidates(route.via, route.target).find(
-          (candidate) =>
-            topPathIsLegal(
-              model,
-              route,
-              simplifyPath([...route.topPath, ...candidate.slice(1)]),
-              route.via,
-              model.routes.filter((other) => other !== route),
-            ),
-        )
+        let extension: Point[] | undefined
+        const candidates = octilinearCandidates(route.via, route.target)
+        for (
+          let candidateIndex = 0;
+          candidateIndex < candidates.length;
+          candidateIndex++
+        ) {
+          const candidate = candidates[candidateIndex]!
+          const candidatePath = simplifyPath([
+            ...route.topPath,
+            ...candidate.slice(1),
+          ])
+          const legal = topPathIsLegal(
+            model,
+            route,
+            candidatePath,
+            route.via,
+            model.routes.filter((other) => other !== route),
+          )
+          yield {
+            action: "evaluate_top_layer_target_extension",
+            status: legal ? "accepted" : "rejected",
+            connectionName: route.connectionName,
+            candidateId: `target_extension_${candidateIndex}`,
+            reason: legal ? undefined : "top_layer_clearance",
+            point: candidate.at(-1),
+            searchStart: route.via,
+            searchTarget: route.target,
+            candidatePath,
+            layer: "top",
+          }
+          if (legal) {
+            extension = candidate
+            break
+          }
+        }
         if (!extension) {
           throw phaseError(
             "route_prescribed_inner_layers",
@@ -2947,6 +3398,17 @@ const routeInnerLayers = (model: GeometryModel) => {
         }
         route.topPath = simplifyPath([...route.topPath, ...extension.slice(1)])
         route.innerPath = [{ ...route.via }, { ...route.target }]
+        yield {
+          action: "commit_top_layer_target_extension",
+          status: "accepted",
+          connectionName: route.connectionName,
+          point: route.target,
+          searchStart: route.via,
+          searchTarget: route.target,
+          candidatePath: route.topPath,
+          layer: "top",
+          route: snapshotRoutedNet(route),
+        }
       }
       continue
     }
@@ -3026,7 +3488,18 @@ const routeInnerLayers = (model: GeometryModel) => {
         for (const route of order) {
           const startXi = xIndex.get(Q(route.via.x))
           const startYi = yIndex.get(Q(route.via.y))
-          if (startXi === undefined || startYi === undefined) continue
+          if (startXi === undefined || startYi === undefined) {
+            yield {
+              action: "route_inner_layer_connection",
+              status: "rejected",
+              connectionName: route.connectionName,
+              reason: "start_outside_search_grid",
+              searchStart: route.via,
+              searchTarget: route.target,
+              layer,
+            }
+            continue
+          }
           const occupiedSegments = [
             ...model.previousSegments.filter(
               (segment) =>
@@ -3052,7 +3525,7 @@ const routeInnerLayers = (model: GeometryModel) => {
               (referenceRoute.target.y - referenceRoute.via.y) * progress
             )
           }
-          const path = findGridPath({
+          const path = yield* findGridPathSteps({
             xs,
             ys,
             starts: [
@@ -3105,10 +3578,52 @@ const routeInnerLayers = (model: GeometryModel) => {
               Math.abs(route.target.x - point.x) +
               Math.abs(route.target.y - point.y) +
               Math.max(0, point.x - route.target.x) * 0.2,
+            visualization: {
+              actionScope: "inner_layer",
+              connectionName: route.connectionName,
+              layer,
+              startPoint: route.via,
+              targetPoint: route.target,
+            },
           })
-          if (path) accepted.push({ route, path })
+          if (path) {
+            accepted.push({ route, path })
+            yield {
+              action: "route_inner_layer_connection",
+              status: "accepted",
+              connectionName: route.connectionName,
+              point: path.at(-1),
+              searchStart: route.via,
+              searchTarget: route.target,
+              candidatePath: path,
+              layer,
+              route: {
+                ...snapshotRoutedNet(route),
+                innerPath: path.map((point) => ({ ...point })),
+              },
+            }
+          } else {
+            yield {
+              action: "route_inner_layer_connection",
+              status: "rejected",
+              connectionName: route.connectionName,
+              reason: "no_legal_grid_path",
+              searchStart: route.via,
+              searchTarget: route.target,
+              layer,
+            }
+          }
         }
-        if (accepted.length > best.length) best = accepted
+        const improved = accepted.length > best.length
+        if (improved) best = accepted
+        yield {
+          action: "complete_inner_layer_order",
+          status: improved ? "accepted" : "rejected",
+          reason: improved ? "new_best_schedule" : "not_better_than_best",
+          processed: accepted.length,
+          total: layerRoutes.length,
+          layer,
+        }
         if (best.length === layerRoutes.length) break
       }
       if (best.length === layerRoutes.length) break
@@ -3129,7 +3644,29 @@ const routeInnerLayers = (model: GeometryModel) => {
         )}`,
       )
     }
-    for (const item of best) item.route.innerPath = item.path
+    for (let itemIndex = 0; itemIndex < best.length; itemIndex++) {
+      const item = best[itemIndex]!
+      item.route.innerPath = item.path
+      yield {
+        action: "commit_inner_layer_route",
+        status: "accepted",
+        connectionName: item.route.connectionName,
+        processed: itemIndex + 1,
+        total: best.length,
+        point: item.path.at(-1),
+        searchStart: item.route.via,
+        searchTarget: item.route.target,
+        candidatePath: item.path,
+        layer,
+        route: snapshotRoutedNet(item.route),
+      }
+    }
+  }
+}
+
+const routeInnerLayers = (model: GeometryModel) => {
+  for (const _step of routeInnerLayersSteps(model)) {
+    // Drain the same incremental implementation for legacy synchronous calls.
   }
 }
 
@@ -3475,6 +4012,200 @@ const buildOutput = (model: GeometryModel): InProcessAutorouterResult => {
   }
 }
 
+const miterRouteCorners = (model: GeometryModel, route: RoutedNet) => {
+  const ownPad = getOwnPad(model, route)
+  const topReplacementAllowed = (start: Point, end: Point) =>
+    Boolean(ownPad) &&
+    segmentPadEdgeDistance(model, start, end, ownPad!.id) + EPS >=
+      model.rules.traceWidth / 2 + model.rules.traceToPadClearance &&
+    model.routes.every(
+      (other) =>
+        other.connectionName === route.connectionName ||
+        (pointSegmentDistance(other.via, start, end) + EPS >=
+          traceViaCenterDistance(model.rules) &&
+          pathSegments(other.topPath).every(
+            (segment) =>
+              segmentDistance(start, end, segment.a, segment.b) + EPS >=
+              tracePairCenterDistance(model.rules),
+          )),
+    ) &&
+    model.previousSegments
+      .filter((segment) => segment.layer === "top")
+      .every(
+        (segment) =>
+          segmentDistance(start, end, segment.a, segment.b) + EPS >=
+          tracePairCenterDistance(model.rules),
+      )
+  route.topPath = miterRightAngleTurns(
+    route.topPath,
+    model.rules,
+    topReplacementAllowed,
+  )
+  route.innerPath = miterRightAngleTurns(
+    route.innerPath,
+    model.rules,
+    (start, end) =>
+      model.routes.every(
+        (other) =>
+          other.connectionName === route.connectionName ||
+          (pointSegmentDistance(other.via, start, end) + EPS >=
+            traceViaCenterDistance(model.rules) &&
+            (other.selectedLayer !== route.selectedLayer ||
+              pathSegments(other.innerPath).every(
+                (segment) =>
+                  segmentDistance(start, end, segment.a, segment.b) + EPS >=
+                  tracePairCenterDistance(model.rules),
+              ))),
+      ) &&
+      model.previousSegments
+        .filter((segment) => segment.layer === route.selectedLayer)
+        .every(
+          (segment) =>
+            segmentDistance(start, end, segment.a, segment.b) + EPS >=
+            tracePairCenterDistance(model.rules),
+        ),
+  )
+}
+
+export type ReferenceRouteSnapshot = {
+  connectionName: string
+  selectedLayer: string
+  source: Point
+  target: Point
+  topPath: Point[]
+  via: Point
+  innerPath: Point[]
+  kind: "early" | "residual"
+}
+
+/**
+ * Stateful access to the validated reference algorithm. Every method mutates
+ * the same geometry model, so public preprocessing and routing are one honest
+ * dataflow rather than a parallel visualization-only pipeline.
+ */
+export class IncrementalReferenceFanoutSession {
+  private readonly model: GeometryModel
+  private readonly computeClock = new ActiveComputeClock()
+  private earlyDropGenerator: Generator<ReferenceSearchStep, void> | null = null
+  private topRouteGenerator: Generator<ReferenceSearchStep, void> | null = null
+  private innerRouteGenerator: Generator<ReferenceSearchStep, void> | null =
+    null
+  private lastSearchStep: ReferenceSearchStep | null = null
+  private miterCursor = 0
+
+  constructor(rankedModel: RankedFanoutModel) {
+    this.model = {
+      ...rankedModel.model,
+      freeCells: rankedModel.freeCells,
+      freeRegions: rankedModel.freeRegions,
+      earlyRouteCandidates: [],
+      routes: [],
+    }
+  }
+
+  stepIndependentEarlyDropVias(): boolean {
+    this.earlyDropGenerator ??= assignEarlyDropsSteps(
+      this.model,
+      this.computeClock,
+    )
+    return this.advanceSearch(
+      this.earlyDropGenerator,
+      "place_independent_early_drop_vias",
+    )
+  }
+
+  stepResidualTopDogbones(): boolean {
+    this.topRouteGenerator ??= routeResidualTopDogbonesSteps(this.model)
+    return this.advanceSearch(
+      this.topRouteGenerator,
+      "complete_top_layer_routes",
+    )
+  }
+
+  stepPrescribedInnerLayers(): boolean {
+    this.innerRouteGenerator ??= routeInnerLayersSteps(this.model)
+    return this.advanceSearch(
+      this.innerRouteGenerator,
+      "route_prescribed_inner_layers",
+    )
+  }
+
+  getLastSearchStep(): ReferenceSearchStep | null {
+    return this.lastSearchStep
+  }
+
+  private advanceSearch(
+    generator: Generator<ReferenceSearchStep, void>,
+    completedAction: string,
+  ): boolean {
+    this.computeClock.beginStep()
+    let result: IteratorResult<ReferenceSearchStep, void>
+    try {
+      result = generator.next()
+    } finally {
+      this.computeClock.endStep()
+    }
+    if (result.done) {
+      this.lastSearchStep = {
+        action: completedAction,
+        status: "completed",
+      }
+      return true
+    }
+    this.lastSearchStep = result.value
+    return false
+  }
+
+  assignPreferredLayers() {
+    assignPreferredLayers(this.model)
+  }
+
+  routePrescribedLayers() {
+    routeInnerLayers(this.model)
+  }
+
+  miterNextRoute(): ReferenceRouteSnapshot | null {
+    const route = this.model.routes[this.miterCursor]
+    if (!route) return null
+    miterRouteCorners(this.model, route)
+    this.miterCursor++
+    return this.snapshotRoute(route)
+  }
+
+  validate() {
+    validateGeometry(this.model)
+  }
+
+  buildOutput(): InProcessAutorouterResult {
+    return buildOutput(this.model)
+  }
+
+  get routeCount() {
+    return this.model.routes.length
+  }
+
+  get miteredRouteCount() {
+    return this.miterCursor
+  }
+
+  getRoutes(): ReferenceRouteSnapshot[] {
+    return this.model.routes.map((route) => this.snapshotRoute(route))
+  }
+
+  getVisualizationContext(): RankedFanoutModel {
+    return {
+      model: this.model,
+      freeCells: this.model.freeCells,
+      freeRegions: this.model.freeRegions,
+      legalCellCount: this.model.freeCells.length,
+    }
+  }
+
+  private snapshotRoute(route: RoutedNet): ReferenceRouteSnapshot {
+    return snapshotRoutedNet(route)
+  }
+}
+
 /**
  * Pure SRJ-to-SRJ port of the 0hmx AM62L free-space fanout strategy. Geometry
  * is normalized so that both the right-escaping SoC and left-escaping RAM use
@@ -3506,60 +4237,7 @@ export const solveAm62lFreeSpaceFanout = (
   routeInnerLayers(model)
   reportPhase(reportProgress, 6)
 
-  for (const route of model.routes) {
-    const ownPad = getOwnPad(model, route)
-    const topReplacementAllowed = (start: Point, end: Point) =>
-      Boolean(ownPad) &&
-      segmentPadEdgeDistance(model, start, end, ownPad!.id) + EPS >=
-        model.rules.traceWidth / 2 + model.rules.traceToPadClearance &&
-      model.routes.every(
-        (other) =>
-          other.connectionName === route.connectionName ||
-          (pointSegmentDistance(other.via, start, end) + EPS >=
-            traceViaCenterDistance(model.rules) &&
-            pathSegments(other.topPath).every(
-              (segment) =>
-                segmentDistance(start, end, segment.a, segment.b) + EPS >=
-                tracePairCenterDistance(model.rules),
-            )),
-      ) &&
-      model.previousSegments
-        .filter((segment) => segment.layer === "top")
-        .every(
-          (segment) =>
-            segmentDistance(start, end, segment.a, segment.b) + EPS >=
-            tracePairCenterDistance(model.rules),
-        )
-    route.topPath = miterRightAngleTurns(
-      route.topPath,
-      model.rules,
-      topReplacementAllowed,
-    )
-    route.innerPath = miterRightAngleTurns(
-      route.innerPath,
-      model.rules,
-      (start, end) =>
-        model.routes.every(
-          (other) =>
-            other.connectionName === route.connectionName ||
-            (pointSegmentDistance(other.via, start, end) + EPS >=
-              traceViaCenterDistance(model.rules) &&
-              (other.selectedLayer !== route.selectedLayer ||
-                pathSegments(other.innerPath).every(
-                  (segment) =>
-                    segmentDistance(start, end, segment.a, segment.b) + EPS >=
-                    tracePairCenterDistance(model.rules),
-                ))),
-        ) &&
-        model.previousSegments
-          .filter((segment) => segment.layer === route.selectedLayer)
-          .every(
-            (segment) =>
-              segmentDistance(start, end, segment.a, segment.b) + EPS >=
-              tracePairCenterDistance(model.rules),
-          ),
-    )
-  }
+  for (const route of model.routes) miterRouteCorners(model, route)
   validateGeometry(model)
   reportPhase(reportProgress, 7)
 

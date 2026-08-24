@@ -7,6 +7,7 @@ test("model validation fails loudly during pipeline setup", async () => {
   input.obstacles = []
   const solver = new FixedTargetBgaFanoutSolver(input)
 
+  solver.step()
   expect(() => solver.step()).toThrow(
     "[build_pad_topology/all] no source BGA component",
   )
