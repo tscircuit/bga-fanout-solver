@@ -2,6 +2,7 @@ import { BaseSolver } from "@tscircuit/solver-utils"
 import type { GraphicsObject } from "graphics-debug"
 import { distance, EPS, gridKey, Q } from "../model/geometry"
 import type { FanoutModel, FreeCell, FreeSpaceAnalysis } from "../model/types"
+import { pointSegmentDistance } from "../routing/routeGeometry"
 import { visualizeModel } from "../visualize/modelVisuals"
 
 type Phase = "sample" | "seed" | "flood" | "pack" | "finish"
@@ -13,6 +14,10 @@ export class FindFreeSpaceSolver extends BaseSolver {
   private column = 0
   private readonly rowCount: number
   private readonly columnCount: number
+  private readonly samplePitchX: number
+  private readonly samplePitchY: number
+  private readonly sampleMinX: number
+  private readonly sampleMinY: number
   private readonly legalByGrid = new Map<string, FreeCell>()
   private legalSeeds: FreeCell[] = []
   private seedCursor = 0
@@ -30,18 +35,17 @@ export class FindFreeSpaceSolver extends BaseSolver {
   constructor(model: FanoutModel) {
     super()
     this.model = model
-    const samplePitchX = model.pitchX / 2
-    const samplePitchY = model.pitchY / 2
+    this.samplePitchX = model.pitchX / 2
+    this.samplePitchY = model.pitchY / 2
+    const viaRadius = model.rules.viaDiameter / 2
+    this.sampleMinX = Q(model.routingBounds.minX + viaRadius)
+    this.sampleMinY = Q(model.routingBounds.minY + viaRadius)
+    const sampleMaxX = model.routingBounds.maxX - viaRadius
+    const sampleMaxY = model.routingBounds.maxY - viaRadius
     this.rowCount =
-      Math.round(
-        (model.padBounds.maxY - model.padBounds.minY - model.pitchY) /
-          samplePitchY,
-      ) + 1
+      Math.floor((sampleMaxY - this.sampleMinY) / this.samplePitchY) + 1
     this.columnCount =
-      Math.round(
-        (model.padBounds.maxX - model.padBounds.minX - model.pitchX) /
-          samplePitchX,
-      ) + 1
+      Math.floor((sampleMaxX - this.sampleMinX) / this.samplePitchX) + 1
     this.MAX_ITERATIONS =
       Math.max(1, this.rowCount * this.columnCount * 5) + 100
   }
@@ -72,16 +76,8 @@ export class FindFreeSpaceSolver extends BaseSolver {
       return
     }
     const cell: FreeCell = {
-      x: Q(
-        this.model.padBounds.minX +
-          this.model.pitchX / 2 +
-          this.column * (this.model.pitchX / 2),
-      ),
-      y: Q(
-        this.model.padBounds.minY +
-          this.model.pitchY / 2 +
-          this.row * (this.model.pitchY / 2),
-      ),
+      x: Q(this.sampleMinX + this.column * this.samplePitchX),
+      y: Q(this.sampleMinY + this.row * this.samplePitchY),
       row: this.row,
       column: this.column,
       clearance: 0,
@@ -92,8 +88,24 @@ export class FindFreeSpaceSolver extends BaseSolver {
         Number.POSITIVE_INFINITY,
       ) -
       this.model.rules.viaDiameter / 2
+    const previousViaLegal = this.model.previousVias.every(
+      (via) => distance(cell, via) + EPS >= this.model.rules.viaToViaCenter,
+    )
+    const requiredTraceCenterDistance =
+      this.model.rules.viaDiameter / 2 +
+      this.model.rules.traceWidth / 2 +
+      this.model.rules.traceToViaClearance
+    const previousTraceLegal = this.model.previousSegments.every(
+      (segment) =>
+        pointSegmentDistance(cell, segment.a, segment.b) + EPS >=
+        requiredTraceCenterDistance,
+    )
     this.activeCell = cell
-    if (cell.clearance + EPS >= this.model.rules.viaToPadClearance) {
+    if (
+      cell.clearance + EPS >= this.model.rules.viaToPadClearance &&
+      previousViaLegal &&
+      previousTraceLegal
+    ) {
       this.legalByGrid.set(gridKey(cell.row, cell.column), cell)
     }
     this.column++
@@ -229,6 +241,9 @@ export class FindFreeSpaceSolver extends BaseSolver {
       model: this.model,
       freeCells: [...this.legalByGrid.values()],
       activeCell: this.activeCell,
+      stage: `find free space · ${this.phase}`,
+      progress: this.computeProgress(),
+      counts: `${this.legalByGrid.size} legal · ${this.qualifyingRegions.length} regions`,
     })
   }
 }
