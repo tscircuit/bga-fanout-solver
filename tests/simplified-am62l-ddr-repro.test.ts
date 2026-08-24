@@ -74,5 +74,5 @@ test("exact index.circuit.tsx SoC capture preserves its consumer failure", () =>
   expect(() => solver.solve()).toThrow(EXPECTED_FAILURE_PREFIX)
   expect(solver.failed).toBeTrue()
   expect(solver.error).toContain(EXPECTED_FAILURE_PREFIX)
-  expect(solver.getCurrentStageName()).toBe("compatibilityRoute")
+  expect(solver.getCurrentStageName()).toBe("completeTopLayerRoutes")
 }, 120_000)

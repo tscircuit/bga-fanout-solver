@@ -68,7 +68,7 @@ test("full AM62L SoC power-first fixture preserves its measured failure", () => 
   expect(() => solver.solve()).toThrow(problem.expectedFailure.message)
   expect(solver.failed).toBeTrue()
   expect(solver.error).toContain(problem.expectedFailure.message)
-  expect(solver.getCurrentStageName()).toBe("compatibilityRoute")
+  expect(solver.getCurrentStageName()).toBe("completeTopLayerRoutes")
 
   const visuals = solver.visualize()
   expect(

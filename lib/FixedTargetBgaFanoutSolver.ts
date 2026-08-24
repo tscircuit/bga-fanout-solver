@@ -5,86 +5,173 @@ import {
   type PipelineStep,
 } from "@tscircuit/solver-utils"
 import { mergeGraphics, type GraphicsObject } from "graphics-debug"
-import { buildFanoutModel } from "./model/buildFanoutModel"
 import type {
   FanoutModel,
   FixedTargetBgaFanoutOutput,
   FreeSpaceAnalysis,
+  FreeSpaceRegions,
+  FreeSpaceSample,
   RankedFanoutModel,
 } from "./model/types"
-import { CompatibilityRouteSolver } from "./private/CompatibilityRouteSolver"
-import { FindFreeSpaceSolver } from "./stages/FindFreeSpaceSolver"
+import type { IncrementalReferenceFanoutSession } from "./private/reference/solve-am62l-free-space-fanout"
+import { BuildFanoutModelSolver } from "./stages/BuildFanoutModelSolver"
+import {
+  DiscoverFreeSpaceRegionsSolver,
+  PackFreeSpaceRegionsSolver,
+  SampleFreeSpaceCellsSolver,
+} from "./stages/FindFreeSpaceSolver"
 import { RankFanoutNetsSolver } from "./stages/RankFanoutNetsSolver"
+import {
+  AssignPrescribedLayersSolver,
+  BuildReferenceOutputSolver,
+  CompleteTopLayerRoutesSolver,
+  InitializeReferenceRoutingSolver,
+  MiterRouteCornersSolver,
+  PlaceIndependentEarlyDropViasSolver,
+  RoutePrescribedInnerLayersSolver,
+  ValidateReferenceRoutesSolver,
+} from "./stages/ReferenceRoutingStageSolvers"
 import { visualizeInput } from "./visualize/inputVisuals"
+import { LOCAL_CONNECTION_GUIDE_LABEL } from "./visualize/simpleRouteJsonVisuals"
 
-const FIND_FREE_SPACE = "findFreeSpace"
+const BUILD_FANOUT_MODEL = "buildFanoutModel"
+const SAMPLE_FREE_SPACE_CELLS = "sampleFreeSpaceCells"
+const DISCOVER_FREE_SPACE_REGIONS = "discoverFreeSpaceRegions"
+const PACK_FREE_SPACE_REGIONS = "packFreeSpaceRegions"
 const RANK_NETS = "rankFanoutNets"
-const COMPATIBILITY_ROUTE = "compatibilityRoute"
+const INITIALIZE_REFERENCE_ROUTING = "initializeReferenceRouting"
+const PLACE_EARLY_DROPS = "placeIndependentEarlyDropVias"
+const COMPLETE_TOP_ROUTES = "completeTopLayerRoutes"
+const ASSIGN_PRESCRIBED_LAYERS = "assignPrescribedLayers"
+const ROUTE_PRESCRIBED_LAYERS = "routePrescribedInnerLayers"
+const MITER_ROUTE_CORNERS = "miterRouteCorners"
+const VALIDATE_ROUTES = "validateReconstructedGeometry"
+const BUILD_OUTPUT = "buildOutput"
 
 export class FixedTargetBgaFanoutSolver extends BasePipelineSolver<SimpleRouteJson> {
-  private fanoutModel: FanoutModel | null = null
   private readonly inputVisualization: GraphicsObject
-  private setupError: unknown | null = null
 
   override pipelineDef: PipelineStep<any>[] = [
     definePipelineStep(
-      FIND_FREE_SPACE,
-      FindFreeSpaceSolver,
-      (solver: FixedTargetBgaFanoutSolver) => [solver.requireFanoutModel()],
+      BUILD_FANOUT_MODEL,
+      BuildFanoutModelSolver,
+      (solver: FixedTargetBgaFanoutSolver) => [solver.inputProblem],
+    ),
+    definePipelineStep(
+      SAMPLE_FREE_SPACE_CELLS,
+      SampleFreeSpaceCellsSolver,
+      (solver: FixedTargetBgaFanoutSolver) => [
+        solver.requireStageOutput<FanoutModel>(BUILD_FANOUT_MODEL),
+      ],
+    ),
+    definePipelineStep(
+      DISCOVER_FREE_SPACE_REGIONS,
+      DiscoverFreeSpaceRegionsSolver,
+      (solver: FixedTargetBgaFanoutSolver) => [
+        solver.requireStageOutput<FreeSpaceSample>(SAMPLE_FREE_SPACE_CELLS),
+      ],
+    ),
+    definePipelineStep(
+      PACK_FREE_SPACE_REGIONS,
+      PackFreeSpaceRegionsSolver,
+      (solver: FixedTargetBgaFanoutSolver) => [
+        solver.requireStageOutput<FreeSpaceRegions>(
+          DISCOVER_FREE_SPACE_REGIONS,
+        ),
+      ],
     ),
     definePipelineStep(
       RANK_NETS,
       RankFanoutNetsSolver,
       (solver: FixedTargetBgaFanoutSolver) => [
-        solver.requireStageOutput<FreeSpaceAnalysis>(FIND_FREE_SPACE),
+        solver.requireStageOutput<FreeSpaceAnalysis>(PACK_FREE_SPACE_REGIONS),
       ],
     ),
     definePipelineStep(
-      COMPATIBILITY_ROUTE,
-      CompatibilityRouteSolver,
+      INITIALIZE_REFERENCE_ROUTING,
+      InitializeReferenceRoutingSolver,
       (solver: FixedTargetBgaFanoutSolver) => [
-        {
-          input: solver.inputProblem,
-          rankedModel: solver.requireStageOutput<RankedFanoutModel>(RANK_NETS),
-        },
+        solver.requireStageOutput<RankedFanoutModel>(RANK_NETS),
+      ],
+    ),
+    definePipelineStep(
+      PLACE_EARLY_DROPS,
+      PlaceIndependentEarlyDropViasSolver,
+      (solver: FixedTargetBgaFanoutSolver) => [
+        solver.requireStageOutput<IncrementalReferenceFanoutSession>(
+          INITIALIZE_REFERENCE_ROUTING,
+        ),
+      ],
+    ),
+    definePipelineStep(
+      COMPLETE_TOP_ROUTES,
+      CompleteTopLayerRoutesSolver,
+      (solver: FixedTargetBgaFanoutSolver) => [
+        solver.requireStageOutput<IncrementalReferenceFanoutSession>(
+          PLACE_EARLY_DROPS,
+        ),
+      ],
+    ),
+    definePipelineStep(
+      ASSIGN_PRESCRIBED_LAYERS,
+      AssignPrescribedLayersSolver,
+      (solver: FixedTargetBgaFanoutSolver) => [
+        solver.requireStageOutput<IncrementalReferenceFanoutSession>(
+          COMPLETE_TOP_ROUTES,
+        ),
+      ],
+    ),
+    definePipelineStep(
+      ROUTE_PRESCRIBED_LAYERS,
+      RoutePrescribedInnerLayersSolver,
+      (solver: FixedTargetBgaFanoutSolver) => [
+        solver.requireStageOutput<IncrementalReferenceFanoutSession>(
+          ASSIGN_PRESCRIBED_LAYERS,
+        ),
+      ],
+    ),
+    definePipelineStep(
+      MITER_ROUTE_CORNERS,
+      MiterRouteCornersSolver,
+      (solver: FixedTargetBgaFanoutSolver) => [
+        solver.requireStageOutput<IncrementalReferenceFanoutSession>(
+          ROUTE_PRESCRIBED_LAYERS,
+        ),
+      ],
+    ),
+    definePipelineStep(
+      VALIDATE_ROUTES,
+      ValidateReferenceRoutesSolver,
+      (solver: FixedTargetBgaFanoutSolver) => [
+        solver.requireStageOutput<IncrementalReferenceFanoutSession>(
+          MITER_ROUTE_CORNERS,
+        ),
+      ],
+    ),
+    definePipelineStep(
+      BUILD_OUTPUT,
+      BuildReferenceOutputSolver,
+      (solver: FixedTargetBgaFanoutSolver) => [
+        solver.requireStageOutput<IncrementalReferenceFanoutSession>(
+          VALIDATE_ROUTES,
+        ),
       ],
     ),
   ]
 
   constructor(input: SimpleRouteJson) {
     super(structuredClone(input))
+    this.MAX_ITERATIONS = 10_000_000
     this.inputVisualization = visualizeInput(this.inputProblem)
-  }
-
-  override _setup() {
-    try {
-      this.fanoutModel = buildFanoutModel(this.inputProblem)
-    } catch (error) {
-      this.setupError = error
-    }
-  }
-
-  override _step() {
-    if (this.setupError) throw this.setupError
-    super._step()
   }
 
   override getConstructorParams() {
     return [structuredClone(this.inputProblem)]
   }
 
-  private requireFanoutModel(): FanoutModel {
-    if (!this.fanoutModel) {
-      throw new Error("fanout model requested before solver setup")
-    }
-    return this.fanoutModel
-  }
-
   private requireStageOutput<T>(stageName: string): T {
     const output = this.getStageOutput<T>(stageName)
-    if (!output) {
-      throw new Error(`${stageName} did not produce an output`)
-    }
+    if (!output) throw new Error(`${stageName} did not produce an output`)
     return output
   }
 
@@ -94,9 +181,7 @@ export class FixedTargetBgaFanoutSolver extends BasePipelineSolver<SimpleRouteJs
         "FixedTargetBgaFanoutSolver output requested before completion",
       )
     }
-    return this.requireStageOutput<FixedTargetBgaFanoutOutput>(
-      COMPATIBILITY_ROUTE,
-    )
+    return this.requireStageOutput<FixedTargetBgaFanoutOutput>(BUILD_OUTPUT)
   }
 
   override initialVisualize(): null {
@@ -104,7 +189,24 @@ export class FixedTargetBgaFanoutSolver extends BasePipelineSolver<SimpleRouteJs
   }
 
   override visualize(): GraphicsObject {
-    return mergeGraphics(this.inputVisualization, super.visualize())
+    const action = String(this.activeSubSolver?.stats.action ?? "")
+    const searchIsActive =
+      action.includes("_grid_node") || action.includes("_neighbor")
+    const inputVisualization = searchIsActive
+      ? {
+          ...this.inputVisualization,
+          lines: this.inputVisualization.lines?.map((line) =>
+            line.label?.startsWith(LOCAL_CONNECTION_GUIDE_LABEL)
+              ? {
+                  ...line,
+                  strokeColor: "rgba(148, 163, 184, 0.16)",
+                  strokeWidth: 0.007,
+                }
+              : line,
+          ),
+        }
+      : this.inputVisualization
+    return mergeGraphics(inputVisualization, super.visualize())
   }
 
   override preview(): GraphicsObject {
@@ -113,9 +215,8 @@ export class FixedTargetBgaFanoutSolver extends BasePipelineSolver<SimpleRouteJs
 
   override finalVisualize(): GraphicsObject | null {
     return (
-      this.getSolver<CompatibilityRouteSolver>(
-        COMPATIBILITY_ROUTE,
-      )?.visualize() ?? null
+      this.getSolver<BuildReferenceOutputSolver>(BUILD_OUTPUT)?.visualize() ??
+      null
     )
   }
 }
