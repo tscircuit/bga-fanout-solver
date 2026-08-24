@@ -1,8 +1,12 @@
 import { expect, test } from "bun:test"
 import { buildFanoutModel } from "../lib"
 import { distance, EPS } from "../lib/model/geometry"
-import { AssignViaLinesSolver } from "../lib/stages/AssignViaLinesSolver"
+import { AssignNetsToViasSolver } from "../lib/stages/AssignNetsToViasSolver"
+import { DeriveViaCorridorsSolver } from "../lib/stages/DeriveViaCorridorsSolver"
+import { EnumerateViaLineCandidatesSolver } from "../lib/stages/EnumerateViaLineCandidatesSolver"
 import { FindFreeSpaceSolver } from "../lib/stages/FindFreeSpaceSolver"
+import { GroupBusConnectionsSolver } from "../lib/stages/GroupBusConnectionsSolver"
+import { PlaceViaRowsAndSlotsSolver } from "../lib/stages/PlaceViaRowsAndSlotsSolver"
 import { RankFanoutNetsSolver } from "../lib/stages/RankFanoutNetsSolver"
 import { loadFixture } from "./helpers"
 
@@ -10,13 +14,27 @@ test("via-first assignment fixes one legal, bus-ordered via slot per connection"
   const model = buildFanoutModel(await loadFixture("am62l-soc-fanout"))
   const freeSpaceSolver = new FindFreeSpaceSolver(model)
   freeSpaceSolver.solve()
-  const rankSolver = new RankFanoutNetsSolver(freeSpaceSolver.getOutput())
+  const corridorSolver = new DeriveViaCorridorsSolver(
+    freeSpaceSolver.getOutput(),
+  )
+  corridorSolver.solve()
+  const rankSolver = new RankFanoutNetsSolver(corridorSolver.getOutput())
   rankSolver.solve()
+  const groupSolver = new GroupBusConnectionsSolver(rankSolver.getOutput())
+  groupSolver.solve()
+  const candidateSolver = new EnumerateViaLineCandidatesSolver(
+    groupSolver.getOutput(),
+  )
+  candidateSolver.solve()
+  const placementSolver = new PlaceViaRowsAndSlotsSolver(
+    candidateSolver.getOutput(),
+  )
+  placementSolver.solve()
 
-  const firstSolver = new AssignViaLinesSolver(rankSolver.getOutput())
+  const firstSolver = new AssignNetsToViasSolver(placementSolver.getOutput())
   firstSolver.solve()
   const firstPlan = firstSolver.getOutput()
-  const secondSolver = new AssignViaLinesSolver(rankSolver.getOutput())
+  const secondSolver = new AssignNetsToViasSolver(placementSolver.getOutput())
   secondSolver.solve()
   const secondPlan = secondSolver.getOutput()
 

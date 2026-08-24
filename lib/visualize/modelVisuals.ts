@@ -16,11 +16,17 @@ export const visualizeModel = ({
   freeCells = [],
   activeCell,
   rankedNets = [],
+  stage = "model",
+  progress = 0,
+  counts = "",
 }: {
   model: FanoutModel
   freeCells?: FreeCell[]
   activeCell?: FreeCell
   rankedNets?: FanoutNet[]
+  stage?: string
+  progress?: number
+  counts?: string
 }): GraphicsObject => {
   const world = (point: { x: number; y: number }) =>
     fromCanonical(model.axisSign, point)
@@ -32,6 +38,17 @@ export const visualizeModel = ({
   return {
     coordinateSystem: "cartesian",
     rects: [
+      {
+        center: world({
+          x: (model.routingBounds.minX + model.routingBounds.maxX) / 2,
+          y: (model.routingBounds.minY + model.routingBounds.maxY) / 2,
+        }),
+        width: model.routingBounds.maxX - model.routingBounds.minX,
+        height: model.routingBounds.maxY - model.routingBounds.minY,
+        fill: "#f8fafc40",
+        stroke: "#334155",
+        label: "routing bounds sampled for legal via centers",
+      },
       {
         center: world({
           x: (model.padBounds.minX + model.padBounds.maxX) / 2,
@@ -101,5 +118,27 @@ export const visualizeModel = ({
       strokeDash: [0.07, 0.06],
       label: net.connectionName,
     })),
+    texts: [
+      {
+        ...world({
+          x: model.routingBounds.minX + model.pitchX / 2,
+          y: model.routingBounds.maxY - model.pitchY / 2,
+        }),
+        text: `${stage} · ${Math.round(progress * 100)}%${counts ? ` · ${counts}` : ""}`,
+        color: "#0f172a",
+        fontSize: Math.max(0.12, model.pitchY * 0.28),
+        anchorSide: "top_left",
+      },
+      {
+        ...world({
+          x: model.routingBounds.minX + model.pitchX / 2,
+          y: model.routingBounds.maxY - model.pitchY,
+        }),
+        text: "free-space: pale=legal · cyan=cumulative region · yellow=active cell",
+        color: "#0369a1",
+        fontSize: Math.max(0.1, model.pitchY * 0.2),
+        anchorSide: "top_left",
+      },
+    ],
   }
 }

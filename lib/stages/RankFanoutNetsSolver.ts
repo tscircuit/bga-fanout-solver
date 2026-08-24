@@ -1,14 +1,14 @@
 import { BaseSolver } from "@tscircuit/solver-utils"
 import type { GraphicsObject } from "graphics-debug"
-import type { FreeSpaceAnalysis, RankedFanoutModel } from "../model/types"
+import type { CorridorAnalysis, RankedFanoutModel } from "../model/types"
 import { visualizeModel } from "../visualize/modelVisuals"
 
 export class RankFanoutNetsSolver extends BaseSolver {
-  private readonly analysis: FreeSpaceAnalysis
+  private readonly analysis: CorridorAnalysis
   private cursor = 0
   private output: RankedFanoutModel | null = null
 
-  constructor(analysis: FreeSpaceAnalysis) {
+  constructor(analysis: CorridorAnalysis) {
     super()
     this.analysis = {
       ...analysis,
@@ -84,6 +84,9 @@ export class RankFanoutNetsSolver extends BaseSolver {
       model: this.analysis.model,
       freeCells: this.analysis.freeCells,
       rankedNets: this.analysis.model.nets.slice(0, this.cursor),
+      stage: "rank fanout nets",
+      progress: this.computeProgress(),
+      counts: `${this.cursor}/${this.analysis.model.nets.length} ranked`,
     })
   }
 }

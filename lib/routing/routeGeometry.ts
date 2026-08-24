@@ -10,6 +10,11 @@ import type {
 
 export type Segment = { a: Point; b: Point }
 
+const midpoint = (first: Point, second: Point): Point => ({
+  x: Q((first.x + second.x) / 2),
+  y: Q((first.y + second.y) / 2),
+})
+
 export const cross = (a: Point, b: Point, c: Point) =>
   (b.x - a.x) * (c.y - a.y) - (b.y - a.y) * (c.x - a.x)
 
@@ -224,6 +229,7 @@ const pushPathViolations = ({
         layer,
         amount: 1,
         message: `${route.net.connectionName} has a non-octilinear ${layer} segment`,
+        marker: midpoint(segment.a, segment.b),
       })
     }
     for (const point of [segment.a, segment.b]) {
@@ -239,6 +245,7 @@ const pushPathViolations = ({
           layer,
           amount: outside,
           message: `${route.net.connectionName} leaves the routing bounds on ${layer}`,
+          marker: point,
         })
       }
     }
@@ -253,6 +260,8 @@ const pushPathViolations = ({
           layer,
           amount: required - clearance,
           message: `${route.net.connectionName} violates top trace-to-pad clearance`,
+          marker: midpoint(segment.a, segment.b),
+          clearanceRadius: required,
         })
       }
     }
@@ -275,6 +284,8 @@ const pushPathViolations = ({
           layer,
           amount: required - clearance,
           message: `${route.net.connectionName} violates a previous ${layer} trace`,
+          marker: midpoint(segment.a, segment.b),
+          clearanceRadius: required,
         })
       }
     }
@@ -300,6 +311,11 @@ const pushPathViolations = ({
             layer,
             amount: required - clearance,
             message: `${route.net.connectionName} crosses or crowds ${other.net.connectionName} on ${layer}`,
+            marker: midpoint(
+              midpoint(segment.a, segment.b),
+              midpoint(otherSegment.a, otherSegment.b),
+            ),
+            clearanceRadius: required,
           })
         }
       }
@@ -312,6 +328,8 @@ const pushPathViolations = ({
           layer,
           amount: requiredViaClearance - viaClearance,
           message: `${route.net.connectionName} crowds ${other.net.connectionName}'s via on ${layer}`,
+          marker: other.via,
+          clearanceRadius: requiredViaClearance,
         })
       }
     }
@@ -336,6 +354,7 @@ export const collectRouteViolations = (
         layer: route.net.selectedLayer,
         amount: 1,
         message: `${route.net.connectionName} is not connected to its exact endpoints`,
+        marker: route.via,
       })
     }
     pushPathViolations({
@@ -376,6 +395,8 @@ export const collectRouteViolations = (
           layer: "all",
           amount: model.rules.viaToViaCenter - clearance,
           message: `${first.net.connectionName} and ${second.net.connectionName} violate via spacing`,
+          marker: midpoint(first.via, second.via),
+          clearanceRadius: model.rules.viaToViaCenter,
         })
       }
     }

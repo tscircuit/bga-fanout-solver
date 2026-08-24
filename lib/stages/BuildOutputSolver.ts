@@ -5,28 +5,40 @@ import { distance, EPS, fromCanonical } from "../model/geometry"
 import type {
   CandidateFanoutRoute,
   FixedTargetBgaFanoutOutput,
-  ViaFirstRouteCandidate,
+  ValidatedViaFirstRouteCandidate,
 } from "../model/types"
-import { collectRouteViolations } from "../routing/routeGeometry"
 import { visualizeViaFirstRoutes } from "../visualize/routeVisuals"
 
-const PHASES = [
+export const VIA_FIRST_PHASES = [
   "findFreeSpace",
+  "deriveViaCorridors",
   "rankFanoutNets",
-  "assignViaLines",
-  "connectBallToVia",
-  "connectViaToTarget",
-  "repairRouteConflicts",
-  "validateAndBuildOutput",
+  "groupBusConnections",
+  "enumerateViaLineCandidates",
+  "placeViaRowsAndSlots",
+  "assignNetsToVias",
+  "enumerateTopConnectorTemplates",
+  "scoreTopConnectorTemplates",
+  "commitTopConnectorTemplates",
+  "enumerateInnerConnectorTemplates",
+  "scoreInnerConnectorTemplates",
+  "commitInnerConnectorTemplates",
+  "detectInitialConflicts",
+  "proposeBundleRepairs",
+  "evaluateBundleRepairs",
+  "commitBundleRepairs",
+  "detectRepairedConflicts",
+  "strictValidateRoutes",
+  "buildOutput",
 ]
 
-export class ValidateAndBuildOutputSolver extends BaseSolver {
-  private readonly candidate: ViaFirstRouteCandidate
+export class BuildOutputSolver extends BaseSolver {
+  private readonly candidate: ValidatedViaFirstRouteCandidate
   private readonly traces: SimplifiedPcbTrace[] = []
   private cursor = 0
   private output: FixedTargetBgaFanoutOutput | null = null
 
-  constructor(candidate: ViaFirstRouteCandidate) {
+  constructor(candidate: ValidatedViaFirstRouteCandidate) {
     super()
     this.candidate = candidate
     this.MAX_ITERATIONS = candidate.routes.length + 2
@@ -37,47 +49,15 @@ export class ValidateAndBuildOutputSolver extends BaseSolver {
   }
 
   override _setup() {
-    const violations = collectRouteViolations(
-      this.candidate.plan.model,
-      this.candidate.routes,
-    )
-    this.candidate.violations = violations
-    const violationCounts = Object.fromEntries(
-      [...new Set(violations.map((item) => item.kind))].map((kind) => [
-        kind,
-        violations.filter((item) => item.kind === kind).length,
-      ]),
-    )
-    this.stats = {
-      phase: "validateAndBuildOutput",
-      validated: violations.length === 0,
-      remainingViolations: violations.length,
-      violationCounts,
-      builtTraces: 0,
-      totalConnections: this.candidate.routes.length,
-    }
+    this.updateStats()
   }
 
   override _step() {
-    if (this.candidate.violations.length > 0) {
-      const counts = Object.fromEntries(
-        [...new Set(this.candidate.violations.map((item) => item.kind))].map(
-          (kind) => [
-            kind,
-            this.candidate.violations.filter((item) => item.kind === kind)
-              .length,
-          ],
-        ),
-      )
-      throw new Error(
-        `[validate_via_first_geometry/all] ${this.candidate.violations.length} unresolved DRC violations ${JSON.stringify(counts)}; first: ${this.candidate.violations[0]!.message}`,
-      )
-    }
     const route = this.candidate.routes[this.cursor]
     if (route) {
       this.traces.push(this.buildTrace(route))
       this.cursor++
-      this.stats = { ...this.stats, builtTraces: this.traces.length }
+      this.updateStats()
       return
     }
     const input = this.candidate.plan.model.input
@@ -100,9 +80,10 @@ export class ValidateAndBuildOutputSolver extends BaseSolver {
             : {}),
         })),
       },
-      phases: PHASES,
+      phases: VIA_FIRST_PHASES,
     }
     this.solved = true
+    this.updateStats()
   }
 
   private buildTrace(route: CandidateFanoutRoute): SimplifiedPcbTrace {
@@ -177,6 +158,16 @@ export class ValidateAndBuildOutputSolver extends BaseSolver {
     }
   }
 
+  private updateStats() {
+    this.stats = {
+      phase: "buildOutput",
+      builtTraces: this.traces.length,
+      totalConnections: this.candidate.routes.length,
+      activeConnection:
+        this.candidate.routes[this.cursor]?.net.connectionName ?? null,
+    }
+  }
+
   computeProgress() {
     return this.solved
       ? 1
@@ -185,9 +176,7 @@ export class ValidateAndBuildOutputSolver extends BaseSolver {
 
   override getOutput(): FixedTargetBgaFanoutOutput {
     if (!this.solved || !this.output) {
-      throw new Error(
-        "ValidateAndBuildOutputSolver output requested before completion",
-      )
+      throw new Error("BuildOutputSolver output requested before completion")
     }
     return this.output
   }
@@ -197,6 +186,9 @@ export class ValidateAndBuildOutputSolver extends BaseSolver {
       model: this.candidate.plan.model,
       assignments: this.candidate.plan.viaAssignments,
       routes: this.candidate.routes,
+      stage: "build exact SRJ output",
+      progress: this.computeProgress(),
+      counts: `${this.traces.length}/${this.candidate.routes.length} traces`,
     })
   }
 }
