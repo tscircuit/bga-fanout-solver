@@ -1,7 +1,6 @@
 import { BaseSolver } from "@tscircuit/solver-utils"
 import type { GraphicsObject } from "graphics-debug"
 import { FixedTargetBgaFanoutSolver } from "../../lib"
-import { offsetGraphicsLayers } from "../../lib/visualize/offsetGraphicsLayers"
 import type { FullSocBreakoutProblem } from "./types"
 import { visualizeFullSocProblem } from "./visualizeFullSocProblem"
 
@@ -21,14 +20,12 @@ const mergeVisuals = (
 
 export class FullAm62lSocFailingReproSolver extends BaseSolver {
   private readonly fullSocProblem: FullSocBreakoutProblem
-  private readonly layerOffset: number
   readonly engine: FixedTargetBgaFanoutSolver
 
-  constructor(problem: FullSocBreakoutProblem, { layerOffset = 0 } = {}) {
+  constructor(problem: FullSocBreakoutProblem) {
     super()
     const clonedProblem = structuredClone(problem)
     this.fullSocProblem = clonedProblem
-    this.layerOffset = layerOffset
     this.engine = new FixedTargetBgaFanoutSolver(clonedProblem.solverInput)
     this.activeSubSolver = this.engine
     this.MAX_ITERATIONS = this.engine.MAX_ITERATIONS + 1
@@ -69,13 +66,9 @@ export class FullAm62lSocFailingReproSolver extends BaseSolver {
   }
 
   override visualize(): GraphicsObject {
-    return offsetGraphicsLayers(
-      mergeVisuals(
-        this.engine.visualize(),
-        visualizeFullSocProblem(this.fullSocProblem, this.failed),
-      ),
-      this.fullSocProblem.solverInput.layerCount,
-      this.layerOffset,
+    return mergeVisuals(
+      this.engine.visualize(),
+      visualizeFullSocProblem(this.fullSocProblem, this.failed),
     )
   }
 

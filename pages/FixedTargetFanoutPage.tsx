@@ -1,6 +1,6 @@
 import type { SimpleRouteJson } from "@tscircuit/core"
-import { FixedTargetBgaFanoutSolver } from "../lib"
 import { LayerOffsetSolverPage } from "./LayerOffsetSolverPage"
+import { LayerOffsetFixedTargetBgaFanoutSolver } from "./layer-offset/LayerOffsetFixedTargetBgaFanoutSolver"
 
 export const FixedTargetFanoutPage = ({
   input,
@@ -9,7 +9,10 @@ export const FixedTargetFanoutPage = ({
 }) => (
   <LayerOffsetSolverPage
     createSolver={(layerOffset) =>
-      new FixedTargetBgaFanoutSolver(structuredClone(input), { layerOffset })
+      new LayerOffsetFixedTargetBgaFanoutSolver(
+        structuredClone(input),
+        layerOffset,
+      )
     }
   />
 )

@@ -1,19 +1,8 @@
 import type { BaseSolver } from "@tscircuit/solver-utils"
 import { GenericSolverDebugger } from "@tscircuit/solver-utils/react"
 import { useState } from "react"
-
-export const normalizeLayerOffsetInput = (value: string): string => {
-  if (value === "") return ""
-
-  const layerOffset = Number(value)
-  if (!Number.isFinite(layerOffset)) return ""
-  return layerOffset < 0 ? "0" : value
-}
-
-export const parseLayerOffsetInput = (value: string): number => {
-  const layerOffset = Number(value)
-  return Number.isFinite(layerOffset) ? Math.max(0, layerOffset) : 0
-}
+import { normalizeLayerOffsetInput } from "./layer-offset/normalizeLayerOffsetInput"
+import { parseLayerOffsetInput } from "./layer-offset/parseLayerOffsetInput"
 
 export const LayerOffsetSolverPage = ({
   createSolver,

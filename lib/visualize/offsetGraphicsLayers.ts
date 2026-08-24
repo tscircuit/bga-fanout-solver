@@ -1,90 +1,86 @@
 import type { GraphicsObject } from "graphics-debug"
-
-const getLayerIndex = (
-  layer: string | undefined,
-  layerCount: number,
-): number | null => {
-  if (!layer) return null
-
-  const firstLayer = layer.split(",")[0]
-  const zLayerMatch = /^z(\d+)$/.exec(firstLayer ?? "")
-  if (zLayerMatch) return Number(zLayerMatch[1])
-  if (firstLayer === "top") return 0
-  if (firstLayer === "bottom") return layerCount - 1
-
-  const innerLayerMatch = /^inner(\d+)$/.exec(firstLayer ?? "")
-  return innerLayerMatch ? Number(innerLayerMatch[1]) : null
-}
-
-const getOffset = (
-  layer: string | undefined,
-  layerCount: number,
-  layerOffset: number,
-): number => (getLayerIndex(layer, layerCount) ?? 0) * layerOffset
-
-const offsetPoint = (
-  point: { x: number; y: number },
-  offset: number,
-): { x: number; y: number } => ({
-  ...point,
-  x: point.x + offset,
-  y: point.y + offset,
-})
+import { clampLayerOffset } from "./clampLayerOffset"
+import { getGraphicsLayerOffset } from "./getGraphicsLayerOffset"
+import { offsetGraphicsPoint } from "./offsetGraphicsPoint"
 
 export const offsetGraphicsLayers = (
   graphics: GraphicsObject,
   layerCount: number,
   layerOffset: number,
 ): GraphicsObject => {
-  if (!Number.isFinite(layerOffset) || layerOffset === 0) return graphics
-
-  return {
-    ...graphics,
-    points: graphics.points?.map((point) =>
-      offsetPoint(point, getOffset(point.layer, layerCount, layerOffset)),
-    ),
-    lines: graphics.lines?.map((line) => {
-      const offset = getOffset(line.layer, layerCount, layerOffset)
-      return {
-        ...line,
-        points: line.points.map((point) => offsetPoint(point, offset)),
-      }
-    }),
-    infiniteLines: graphics.infiniteLines?.map((line) => ({
-      ...line,
-      origin: offsetPoint(
-        line.origin,
-        getOffset(line.layer, layerCount, layerOffset),
-      ),
-    })),
-    rects: graphics.rects?.map((rect) => ({
-      ...rect,
-      center: offsetPoint(
-        rect.center,
-        getOffset(rect.layer, layerCount, layerOffset),
-      ),
-    })),
-    circles: graphics.circles?.map((circle) => ({
-      ...circle,
-      center: offsetPoint(
-        circle.center,
-        getOffset(circle.layer, layerCount, layerOffset),
-      ),
-    })),
-    polygons: graphics.polygons?.map((polygon) => {
-      const offset = getOffset(polygon.layer, layerCount, layerOffset)
-      return {
-        ...polygon,
-        points: polygon.points.map((point) => offsetPoint(point, offset)),
-      }
-    }),
-    texts: graphics.texts?.map((text) => {
-      const offset = getOffset(text.layer, layerCount, layerOffset)
-      return {
-        ...text,
-        x: text.x + offset,
-        y: text.y + offset,
-      }
-    }),
+  const normalizedLayerOffset = clampLayerOffset(layerOffset)
+  if (normalizedLayerOffset === 0) {
+    return graphics
   }
+
+  const offsetGraphics = structuredClone(graphics)
+
+  for (const point of offsetGraphics.points ?? []) {
+    const offset = getGraphicsLayerOffset(
+      point.layer,
+      layerCount,
+      normalizedLayerOffset,
+    )
+    offsetGraphicsPoint(point, offset)
+  }
+
+  for (const line of offsetGraphics.lines ?? []) {
+    const offset = getGraphicsLayerOffset(
+      line.layer,
+      layerCount,
+      normalizedLayerOffset,
+    )
+    for (const point of line.points) {
+      offsetGraphicsPoint(point, offset)
+    }
+  }
+
+  for (const line of offsetGraphics.infiniteLines ?? []) {
+    const offset = getGraphicsLayerOffset(
+      line.layer,
+      layerCount,
+      normalizedLayerOffset,
+    )
+    offsetGraphicsPoint(line.origin, offset)
+  }
+
+  for (const rect of offsetGraphics.rects ?? []) {
+    const offset = getGraphicsLayerOffset(
+      rect.layer,
+      layerCount,
+      normalizedLayerOffset,
+    )
+    offsetGraphicsPoint(rect.center, offset)
+  }
+
+  for (const circle of offsetGraphics.circles ?? []) {
+    const offset = getGraphicsLayerOffset(
+      circle.layer,
+      layerCount,
+      normalizedLayerOffset,
+    )
+    offsetGraphicsPoint(circle.center, offset)
+  }
+
+  for (const polygon of offsetGraphics.polygons ?? []) {
+    const offset = getGraphicsLayerOffset(
+      polygon.layer,
+      layerCount,
+      normalizedLayerOffset,
+    )
+    for (const point of polygon.points) {
+      offsetGraphicsPoint(point, offset)
+    }
+  }
+
+  for (const text of offsetGraphics.texts ?? []) {
+    const offset = getGraphicsLayerOffset(
+      text.layer,
+      layerCount,
+      normalizedLayerOffset,
+    )
+    offsetGraphicsPoint(text, offset)
+  }
+
+  return offsetGraphics
 }
