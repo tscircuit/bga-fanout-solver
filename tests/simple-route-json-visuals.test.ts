@@ -29,7 +29,7 @@ const fixtureCases = [
       import.meta.dir,
       "../fixtures/simplified-am62l-ddr-soc-repro.srj.json",
     ),
-    sha256: "2435536ca54a9ad23f58356746593ef5ce1c24f955b03426041b318aec7a03ad",
+    sha256: "4ea12abe2d3f55ddc62e3d54ef48a810aa38fefb2dad7d9bc889036111afda2e",
   },
   {
     fixture: ramFixture,
@@ -37,7 +37,7 @@ const fixtureCases = [
       import.meta.dir,
       "../fixtures/simplified-am62l-ddr-ram-repro.srj.json",
     ),
-    sha256: "baab5746f7365119b1d073d745fd70d4f991778c2a85a493c208e49f2164c9b6",
+    sha256: "824cc9d1f3189b4624631bc7f8d83988d425376447061e82f53a2d629c0fc3e4",
   },
 ] as const
 

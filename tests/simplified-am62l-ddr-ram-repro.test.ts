@@ -13,7 +13,7 @@ test("exact index.circuit.tsx RAM capture preserves its bounded compatibility st
 
   expect(input.layerCount).toBe(8)
   expect(input.connections).toHaveLength(33)
-  expect(input.obstacles).toHaveLength(202)
+  expect(input.obstacles).toHaveLength(988)
   expect(input.traces).toHaveLength(0)
   expect(input.bounds).toEqual({
     minX: 17.65,
@@ -21,6 +21,7 @@ test("exact index.circuit.tsx RAM capture preserves its bounded compatibility st
     minY: -8.650917000000002,
     maxY: 10.549083000000001,
   })
+  expect(obstacleCountByComponentId.pcb_component_0).toHaveLength(373)
   expect(obstacleCountByComponentId.pcb_component_1).toHaveLength(200)
   expect(input.obstacles.filter((obstacle) => obstacle.isCopperPour)).toEqual([
     expect.objectContaining({

@@ -6,9 +6,8 @@ type CaptureSpec = {
   sourcePath: string
   outputFile: string
   routingPcbGroupId: string
-  componentId: string
   obstacleCount: number
-  padObstacleCount: number
+  nonPourObstacleCount: number
   pourCenter: { x: number; y: number }
   pourSize: { width: number; height: number }
   sha256: string
@@ -27,24 +26,22 @@ const captures: CaptureSpec[] = [
     sourcePath: socSourcePath,
     outputFile: "simplified-am62l-ddr-soc-repro.srj.json",
     routingPcbGroupId: "pcb_group_0",
-    componentId: "pcb_component_0",
-    obstacleCount: 375,
-    padObstacleCount: 373,
+    obstacleCount: 988,
+    nonPourObstacleCount: 986,
     pourCenter: { x: 2, y: 1 },
     pourSize: { width: 21.300000000000004, height: 21.300000000000004 },
-    sha256: "2435536ca54a9ad23f58356746593ef5ce1c24f955b03426041b318aec7a03ad",
+    sha256: "4ea12abe2d3f55ddc62e3d54ef48a810aa38fefb2dad7d9bc889036111afda2e",
   },
   {
     label: "RAM",
     sourcePath: ramSourcePath,
     outputFile: "simplified-am62l-ddr-ram-repro.srj.json",
     routingPcbGroupId: "pcb_group_1",
-    componentId: "pcb_component_1",
-    obstacleCount: 202,
-    padObstacleCount: 200,
+    obstacleCount: 988,
+    nonPourObstacleCount: 986,
     pourCenter: { x: 29.675, y: 0.949083 },
     pourSize: { width: 24.05, height: 19.200000000000003 },
-    sha256: "baab5746f7365119b1d073d745fd70d4f991778c2a85a493c208e49f2164c9b6",
+    sha256: "824cc9d1f3189b4624631bc7f8d83988d425376447061e82f53a2d629c0fc3e4",
   },
 ]
 
@@ -74,7 +71,7 @@ for (const capture of captures) {
   const routingPcbGroupIds = new Set(
     input.connections.map((connection) => connection.routingPcbGroupId),
   )
-  const padObstacles = input.obstacles.filter(
+  const nonPourObstacles = input.obstacles.filter(
     (obstacle) => !obstacle.isCopperPour,
   )
   const copperPourObstacles = input.obstacles.filter(
@@ -88,12 +85,11 @@ for (const capture of captures) {
     input.layerCount !== 8 ||
     input.connections.length !== 33 ||
     input.obstacles.length !== capture.obstacleCount ||
-    padObstacles.length !== capture.padObstacleCount ||
+    nonPourObstacles.length !== capture.nonPourObstacleCount ||
     input.traces?.length !== 0 ||
     input.buses?.length !== 3 ||
-    obstacleCountByComponentId.size !== 1 ||
-    obstacleCountByComponentId.get(capture.componentId) !==
-      capture.padObstacleCount ||
+    obstacleCountByComponentId.get("pcb_component_0") !== 373 ||
+    obstacleCountByComponentId.get("pcb_component_1") !== 200 ||
     copperPourObstacles.length !== 2 ||
     copperPourObstacles[0]?.center.x !== capture.pourCenter.x ||
     copperPourObstacles[0]?.center.y !== capture.pourCenter.y ||
