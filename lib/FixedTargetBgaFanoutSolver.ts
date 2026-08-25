@@ -15,6 +15,11 @@ import type {
 } from "./model/types"
 import type { IncrementalReferenceFanoutSession } from "./private/reference/solve-am62l-free-space-fanout"
 import { BuildFanoutModelSolver } from "./stages/BuildFanoutModelSolver"
+import { PlanCopperPourViaDropsSolver } from "./stages/PlanCopperPourViaDropsSolver"
+import {
+  PlanSameNetPadClustersSolver,
+  type PowerPlanePlanningContext,
+} from "./stages/PlanSameNetPadClustersSolver"
 import {
   DiscoverFreeSpaceRegionsSolver,
   PackFreeSpaceRegionsSolver,
@@ -32,9 +37,15 @@ import {
   ValidateReferenceRoutesSolver,
 } from "./stages/ReferenceRoutingStageSolvers"
 import { visualizeInput } from "./visualize/inputVisuals"
+import {
+  promoteTraceLinework,
+  type TraceLineworkFocusBounds,
+} from "./visualize/promoteTraceLinework"
 import { LOCAL_CONNECTION_GUIDE_LABEL } from "./visualize/simpleRouteJsonVisuals"
 
 const BUILD_FANOUT_MODEL = "buildFanoutModel"
+const PLAN_SAME_NET_PAD_CLUSTERS = "planSameNetPadClusters"
+const PLAN_COPPER_POUR_VIA_DROPS = "planCopperPourViaDrops"
 const SAMPLE_FREE_SPACE_CELLS = "sampleFreeSpaceCells"
 const DISCOVER_FREE_SPACE_REGIONS = "discoverFreeSpaceRegions"
 const PACK_FREE_SPACE_REGIONS = "packFreeSpaceRegions"
@@ -149,11 +160,29 @@ export class FixedTargetBgaFanoutSolver extends BasePipelineSolver<SimpleRouteJs
       ],
     ),
     definePipelineStep(
+      PLAN_SAME_NET_PAD_CLUSTERS,
+      PlanSameNetPadClustersSolver,
+      (solver: FixedTargetBgaFanoutSolver) => [
+        solver.requireStageOutput<IncrementalReferenceFanoutSession>(
+          VALIDATE_ROUTES,
+        ),
+      ],
+    ),
+    definePipelineStep(
+      PLAN_COPPER_POUR_VIA_DROPS,
+      PlanCopperPourViaDropsSolver,
+      (solver: FixedTargetBgaFanoutSolver) => [
+        solver.requireStageOutput<PowerPlanePlanningContext>(
+          PLAN_SAME_NET_PAD_CLUSTERS,
+        ),
+      ],
+    ),
+    definePipelineStep(
       BUILD_OUTPUT,
       BuildReferenceOutputSolver,
       (solver: FixedTargetBgaFanoutSolver) => [
         solver.requireStageOutput<IncrementalReferenceFanoutSession>(
-          VALIDATE_ROUTES,
+          PLAN_COPPER_POUR_VIA_DROPS,
         ),
       ],
     ),
@@ -206,7 +235,23 @@ export class FixedTargetBgaFanoutSolver extends BasePipelineSolver<SimpleRouteJs
           ),
         }
       : this.inputVisualization
-    return mergeGraphics(inputVisualization, super.visualize())
+    const model = this.getStageOutput<FanoutModel>(BUILD_FANOUT_MODEL)
+    if (!model) return mergeGraphics(inputVisualization, super.visualize())
+    const horizontalBounds = [
+      model.axisSign * model.padBounds.minX,
+      model.axisSign * model.padBounds.maxX,
+    ]
+    const focusPadding = Math.max(model.rules.viaDiameter, 0.25)
+    const focusBounds: TraceLineworkFocusBounds = {
+      minX: Math.min(...horizontalBounds) - focusPadding,
+      maxX: Math.max(...horizontalBounds) + focusPadding,
+      minY: model.padBounds.minY - focusPadding,
+      maxY: model.padBounds.maxY + focusPadding,
+    }
+    return promoteTraceLinework(
+      mergeGraphics(inputVisualization, super.visualize()),
+      focusBounds,
+    )
   }
 
   override preview(): GraphicsObject {

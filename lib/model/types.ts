@@ -29,6 +29,77 @@ export type FanoutPad = Point & {
   column: number
 }
 
+export type PowerPlanePour = {
+  id: string
+  obstacleIndex: number
+  center: Point
+  width: number
+  height: number
+  ccwRotationDegrees: number
+  layers: string[]
+  netKey: string
+  identityTokens: string[]
+}
+
+export type PowerPlanePad = FanoutPad & {
+  componentId: string
+  pointId: string
+  pcbPortId?: string
+  sourcePortName?: string
+  netKey: string
+  identityTokens: string[]
+  matchingPourIds: string[]
+}
+
+export type SameNetPadLink = {
+  id: string
+  netKey: string
+  firstPadId: string
+  secondPadId: string
+  path: Point[]
+  length: number
+}
+
+export type SameNetPadCluster = {
+  id: string
+  netKey: string
+  padIds: string[]
+  linkIds: string[]
+  matchingPourIds: string[]
+}
+
+export type CopperPourViaDrop = {
+  id: string
+  clusterId: string
+  netKey: string
+  sourcePadId: string
+  via: Point
+  topPath: Point[]
+  pourId: string
+  terminationLayer: string
+}
+
+export type UnresolvedCopperPourViaDrop = {
+  clusterId: string
+  netKey: string
+  padIds: string[]
+  reasonCode:
+    | "no_legal_candidate"
+    | "assignment_conflict"
+    | "search_budget_exhausted"
+  message: string
+}
+
+export type PowerPlanePlan = {
+  pours: PowerPlanePour[]
+  pads: PowerPlanePad[]
+  links: SameNetPadLink[]
+  clusters: SameNetPadCluster[]
+  legalViaCandidateCount: number
+  viaDrops: CopperPourViaDrop[]
+  unresolvedViaDrops: UnresolvedCopperPourViaDrop[]
+}
+
 export type FanoutNet = {
   connection: SimpleRouteJson["connections"][number]
   connectionName: string
@@ -61,6 +132,7 @@ export type FanoutModel = {
   routingBounds: { minX: number; maxX: number; minY: number; maxY: number }
   previousSegments: LayeredSegment[]
   previousVias: LayeredVia[]
+  powerPlanePlan?: PowerPlanePlan
 }
 
 export type FreeSpaceAnalysis = {
@@ -87,4 +159,6 @@ export type FixedTargetBgaFanoutOutput = {
   traces: SimplifiedPcbTrace[]
   outputSimpleRouteJson: SimpleRouteJson
   phases: string[]
+  powerPlanePlan?: PowerPlanePlan
+  powerTraces?: SimplifiedPcbTrace[]
 }

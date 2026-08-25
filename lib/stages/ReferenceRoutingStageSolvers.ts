@@ -5,6 +5,7 @@ import type {
   RankedFanoutModel,
 } from "../model/types"
 import { fromCanonical } from "../model/geometry"
+import { powerTraceIdPrefix } from "../model/powerPlanePlanning"
 import { AM62L_FREE_SPACE_FANOUT_PHASES } from "../private/reference/am62l-free-space-fanout"
 import {
   IncrementalReferenceFanoutSession,
@@ -101,7 +102,7 @@ const visualizeRoutes = (
       radius: context.model.rules.viaDiameter / 2,
       fill: active ? "#facc15" : "#f59e0b",
       stroke: active ? "#b45309" : "#78350f",
-      label: `${route.connectionName} · ${route.kind}`,
+      label: `${route.connectionName} · signal via · ${route.kind}`,
     })
   }
 
@@ -625,14 +626,25 @@ export class BuildReferenceOutputSolver extends BaseSolver {
 
   override _step() {
     const result = this.session.buildOutput()
+    const model = this.session.getVisualizationContext().model
+    const powerTraces = (result.outputSimpleRouteJson.traces ?? []).filter(
+      (trace) => trace.pcb_trace_id.startsWith(powerTraceIdPrefix),
+    )
     this.output = {
       ...result,
       phases: [...AM62L_FREE_SPACE_FANOUT_PHASES],
+      ...(model.powerPlanePlan
+        ? {
+            powerPlanePlan: structuredClone(model.powerPlanePlan),
+            powerTraces,
+          }
+        : {}),
     }
     this.stats = {
       action: "build_output",
       status: "completed",
       traces: result.traces.length,
+      powerTraces: powerTraces.length,
     }
     this.solved = true
   }

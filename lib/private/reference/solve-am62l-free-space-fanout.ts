@@ -10,7 +10,11 @@ import type {
 import { AM62L_FREE_SPACE_FANOUT_PHASES } from "./am62l-free-space-fanout"
 import type { InProcessAutorouterResult } from "./create-in-process-autorouter"
 import { squaredDistance } from "./squared-distance"
-import type { RankedFanoutModel } from "../../model/types"
+import type {
+  FanoutModel,
+  PowerPlanePlan,
+  RankedFanoutModel,
+} from "../../model/types"
 
 type Point = { x: number; y: number }
 type Segment = { a: Point; b: Point }
@@ -81,6 +85,7 @@ type GeometryModel = {
   previousVias: LayeredVia[]
   earlyRouteCandidates: RoutedNet[][]
   routes: RoutedNet[]
+  powerPlanePlan?: PowerPlanePlan
 }
 
 const EPS = 1e-6
@@ -4178,6 +4183,20 @@ export class IncrementalReferenceFanoutSession {
 
   buildOutput(): InProcessAutorouterResult {
     return buildOutput(this.model)
+  }
+
+  /** Commits additive power geometry after mandatory signal validation. */
+  commitPowerPlaneModel(committed: FanoutModel) {
+    this.model.input = structuredClone(committed.input)
+    this.model.previousSegments = committed.previousSegments.map((segment) => ({
+      ...segment,
+      a: { ...segment.a },
+      b: { ...segment.b },
+    }))
+    this.model.previousVias = committed.previousVias.map((via) => ({ ...via }))
+    this.model.powerPlanePlan = committed.powerPlanePlan
+      ? structuredClone(committed.powerPlanePlan)
+      : undefined
   }
 
   get routeCount() {

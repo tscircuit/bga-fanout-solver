@@ -9,5 +9,12 @@ export type {
   FixedTargetBgaFanoutOutput,
   FreeCell,
   FreeSpaceAnalysis,
+  CopperPourViaDrop,
+  PowerPlanePad,
+  PowerPlanePlan,
+  PowerPlanePour,
   RankedFanoutModel,
+  SameNetPadCluster,
+  SameNetPadLink,
+  UnresolvedCopperPourViaDrop,
 } from "./model/types"

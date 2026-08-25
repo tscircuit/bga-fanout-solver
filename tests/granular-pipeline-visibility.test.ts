@@ -20,6 +20,8 @@ test("RAM pipeline exposes real cell and route micro-steps before exact completi
     "routePrescribedInnerLayers",
     "miterRouteCorners",
     "validateReconstructedGeometry",
+    "planSameNetPadClusters",
+    "planCopperPourViaDrops",
     "buildOutput",
   ])
 
