@@ -20,6 +20,8 @@ test("output is guarded and stepping a solved pipeline is a no-op", async () => 
     "routePrescribedInnerLayers",
     "miterRouteCorners",
     "validateReconstructedGeometry",
+    "planSameNetPadClusters",
+    "planCopperPourViaDrops",
     "buildOutput",
   ])
   solver.step()
