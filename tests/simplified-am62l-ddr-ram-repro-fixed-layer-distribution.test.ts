@@ -134,4 +134,30 @@ test("fixed RAM layer distribution solves all 33 traces from the RAM BGA", () =>
   expect(
     Object.values(solver.getStageStats()).every((stage) => stage.completed),
   ).toBe(true)
+
+  const finalVisualization = solver.finalVisualize()
+  expect(finalVisualization).not.toBeNull()
+  expect(
+    finalVisualization!.circles?.filter((circle) =>
+      circle.label?.startsWith("plane via ·"),
+    ),
+  ).toHaveLength(plan!.viaDrops.length)
+  expect(
+    finalVisualization!.circles?.filter((circle) =>
+      circle.label?.includes("skipped plane drop"),
+    ),
+  ).toHaveLength(unresolvedPadIds.length)
+  expect(
+    finalVisualization!.lines?.some((line) =>
+      line.label?.includes("dogbone →"),
+    ),
+  ).toBe(true)
+  expect(
+    finalVisualization!.lines?.some((line) => line.label?.includes(" ↔ ")),
+  ).toBe(true)
+  expect(
+    finalVisualization!.texts?.some(
+      (text) => text.text === "copper_pour_via_drops",
+    ),
+  ).toBe(true)
 }, 120_000)
