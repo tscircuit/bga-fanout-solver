@@ -217,6 +217,22 @@ export class FixedTargetBgaFanoutSolver extends BasePipelineSolver<SimpleRouteJs
     return null
   }
 
+  private getTraceLineworkFocusBounds(
+    model: FanoutModel,
+  ): TraceLineworkFocusBounds {
+    const horizontalBounds = [
+      model.axisSign * model.padBounds.minX,
+      model.axisSign * model.padBounds.maxX,
+    ]
+    const focusPadding = Math.max(model.rules.viaDiameter, 0.25)
+    return {
+      minX: Math.min(...horizontalBounds) - focusPadding,
+      maxX: Math.max(...horizontalBounds) + focusPadding,
+      minY: model.padBounds.minY - focusPadding,
+      maxY: model.padBounds.maxY + focusPadding,
+    }
+  }
+
   override visualize(): GraphicsObject {
     const action = String(this.activeSubSolver?.stats.action ?? "")
     const searchIsActive =
@@ -237,20 +253,9 @@ export class FixedTargetBgaFanoutSolver extends BasePipelineSolver<SimpleRouteJs
       : this.inputVisualization
     const model = this.getStageOutput<FanoutModel>(BUILD_FANOUT_MODEL)
     if (!model) return mergeGraphics(inputVisualization, super.visualize())
-    const horizontalBounds = [
-      model.axisSign * model.padBounds.minX,
-      model.axisSign * model.padBounds.maxX,
-    ]
-    const focusPadding = Math.max(model.rules.viaDiameter, 0.25)
-    const focusBounds: TraceLineworkFocusBounds = {
-      minX: Math.min(...horizontalBounds) - focusPadding,
-      maxX: Math.max(...horizontalBounds) + focusPadding,
-      minY: model.padBounds.minY - focusPadding,
-      maxY: model.padBounds.maxY + focusPadding,
-    }
     return promoteTraceLinework(
       mergeGraphics(inputVisualization, super.visualize()),
-      focusBounds,
+      this.getTraceLineworkFocusBounds(model),
     )
   }
 
@@ -259,9 +264,35 @@ export class FixedTargetBgaFanoutSolver extends BasePipelineSolver<SimpleRouteJs
   }
 
   override finalVisualize(): GraphicsObject | null {
-    return (
-      this.getSolver<BuildReferenceOutputSolver>(BUILD_OUTPUT)?.visualize() ??
-      null
+    const signalVisualization =
+      this.getSolver<BuildReferenceOutputSolver>(BUILD_OUTPUT)?.visualize()
+    if (!signalVisualization) return null
+
+    const clusterVisualization = this.getSolver<PlanSameNetPadClustersSolver>(
+      PLAN_SAME_NET_PAD_CLUSTERS,
+    )?.visualize()
+    const viaDropVisualization = this.getSolver<PlanCopperPourViaDropsSolver>(
+      PLAN_COPPER_POUR_VIA_DROPS,
+    )?.visualize()
+    const clusterGeometry = clusterVisualization
+      ? {
+          ...clusterVisualization,
+          // The via-drop panel already summarizes the completed power plan.
+          // Keep cluster geometry without stacking a second panel over it.
+          rects: [],
+          texts: [],
+        }
+      : { coordinateSystem: "cartesian" as const }
+    const finalVisualization = mergeGraphics(
+      mergeGraphics(signalVisualization, clusterGeometry),
+      viaDropVisualization ?? { coordinateSystem: "cartesian" },
     )
+    const model = this.getStageOutput<FanoutModel>(BUILD_FANOUT_MODEL)
+    return model
+      ? promoteTraceLinework(
+          finalVisualization,
+          this.getTraceLineworkFocusBounds(model),
+        )
+      : finalVisualization
   }
 }
