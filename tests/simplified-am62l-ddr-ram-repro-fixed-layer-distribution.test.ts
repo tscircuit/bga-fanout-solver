@@ -55,8 +55,8 @@ test("fixed RAM layer distribution solves all 33 traces from the RAM BGA", () =>
     plan!.pads.map((pad) => pad.id).sort(),
   )
   expect(plan!.links).toHaveLength(19)
-  expect(plan!.viaDrops).toHaveLength(31)
-  expect(plan!.unresolvedViaDrops).toHaveLength(8)
+  expect(plan!.viaDrops).toHaveLength(28)
+  expect(plan!.unresolvedViaDrops).toHaveLength(11)
   expect(plan!.legalViaCandidateCount).toBeGreaterThan(0)
 
   const clusterById = new Map(
@@ -95,7 +95,7 @@ test("fixed RAM layer distribution solves all 33 traces from the RAM BGA", () =>
   const unresolvedPadIds = plan!.unresolvedViaDrops.flatMap(
     (item) => item.padIds,
   )
-  expect(new Set(unresolvedPadIds).size).toBe(8)
+  expect(new Set(unresolvedPadIds).size).toBe(14)
   const droppedClusterIds = new Set(
     plan!.viaDrops.map((drop) => drop.clusterId),
   )
@@ -103,7 +103,7 @@ test("fixed RAM layer distribution solves all 33 traces from the RAM BGA", () =>
     plan!.clusters
       .filter((cluster) => droppedClusterIds.has(cluster.id))
       .flatMap((cluster) => cluster.padIds),
-  ).toHaveLength(50)
+  ).toHaveLength(44)
   expect(
     plan!.unresolvedViaDrops.every(
       (item) => item.reasonCode === "no_legal_candidate",

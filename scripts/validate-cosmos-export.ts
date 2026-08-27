@@ -7,6 +7,7 @@ type CosmosFixtureManifest = {
 
 const exportDirectory = path.resolve(import.meta.dir, "../cosmos-export")
 const expectedFixtureFiles = [
+  "pages/expanded-breakpoint-spacing-1.25.page.tsx",
   "pages/full-am62l-soc-failing-repro.page.tsx",
   "pages/ram-bga.page.tsx",
   "pages/simplified-am62l-ddr-ram-repro-fixed-layer-distribution.page.tsx",

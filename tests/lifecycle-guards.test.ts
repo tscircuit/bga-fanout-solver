@@ -22,6 +22,7 @@ test("output is guarded and stepping a solved pipeline is a no-op", async () => 
     "validateReconstructedGeometry",
     "planSameNetPadClusters",
     "planCopperPourViaDrops",
+    "resolvePowerSignalConflicts",
     "buildOutput",
   ])
   solver.step()

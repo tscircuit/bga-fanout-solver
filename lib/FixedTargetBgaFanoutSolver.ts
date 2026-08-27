@@ -26,6 +26,7 @@ import {
   SampleFreeSpaceCellsSolver,
 } from "./stages/FindFreeSpaceSolver"
 import { RankFanoutNetsSolver } from "./stages/RankFanoutNetsSolver"
+import { ResolvePowerSignalConflictsSolver } from "./stages/ResolvePowerSignalConflictsSolver"
 import {
   AssignPrescribedLayersSolver,
   BuildReferenceOutputSolver,
@@ -46,6 +47,7 @@ import { LOCAL_CONNECTION_GUIDE_LABEL } from "./visualize/simpleRouteJsonVisuals
 const BUILD_FANOUT_MODEL = "buildFanoutModel"
 const PLAN_SAME_NET_PAD_CLUSTERS = "planSameNetPadClusters"
 const PLAN_COPPER_POUR_VIA_DROPS = "planCopperPourViaDrops"
+const RESOLVE_POWER_SIGNAL_CONFLICTS = "resolvePowerSignalConflicts"
 const SAMPLE_FREE_SPACE_CELLS = "sampleFreeSpaceCells"
 const DISCOVER_FREE_SPACE_REGIONS = "discoverFreeSpaceRegions"
 const PACK_FREE_SPACE_REGIONS = "packFreeSpaceRegions"
@@ -178,11 +180,27 @@ export class FixedTargetBgaFanoutSolver extends BasePipelineSolver<SimpleRouteJs
       ],
     ),
     definePipelineStep(
+      RESOLVE_POWER_SIGNAL_CONFLICTS,
+      ResolvePowerSignalConflictsSolver,
+      (solver: FixedTargetBgaFanoutSolver) => [
+        {
+          rankedModel: solver.requireStageOutput<RankedFanoutModel>(RANK_NETS),
+          initialContext: solver.requireStageOutput<PowerPlanePlanningContext>(
+            PLAN_SAME_NET_PAD_CLUSTERS,
+          ),
+          baselineSession:
+            solver.requireStageOutput<IncrementalReferenceFanoutSession>(
+              PLAN_COPPER_POUR_VIA_DROPS,
+            ),
+        },
+      ],
+    ),
+    definePipelineStep(
       BUILD_OUTPUT,
       BuildReferenceOutputSolver,
       (solver: FixedTargetBgaFanoutSolver) => [
         solver.requireStageOutput<IncrementalReferenceFanoutSession>(
-          PLAN_COPPER_POUR_VIA_DROPS,
+          RESOLVE_POWER_SIGNAL_CONFLICTS,
         ),
       ],
     ),

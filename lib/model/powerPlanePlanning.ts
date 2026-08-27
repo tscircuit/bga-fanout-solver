@@ -64,6 +64,11 @@ const identitiesOverlap = (
   return first.identityTokens.some((token) => secondTokens.has(token))
 }
 
+const obstacleMatchesNetKey = (obstacle: RouteObstacle, netKey: string) => {
+  const identity = electricalIdentity(obstacle)
+  return Boolean(identity.netKey) && identity.netKey === netKey
+}
+
 const obstacleId = (obstacle: RouteObstacle, index: number) =>
   obstacle.circuitJsonMetadata?.pcb_smtpad_id ??
   obstacle.circuitJsonMetadata?.pcb_copper_pour_id ??
@@ -311,6 +316,106 @@ export const pathLength = (path: readonly Point[]) =>
     .slice(1)
     .reduce((sum, point, index) => sum + distance(path[index]!, point), 0)
 
+const rotateIntoObstacleFrame = (
+  model: FanoutModel,
+  obstacle: RouteObstacle,
+  point: Point,
+) => {
+  const center = toCanonical(model.axisSign, obstacle.center)
+  const radians =
+    (-model.axisSign * (obstacle.ccwRotationDegrees ?? 0) * Math.PI) / 180
+  const dx = point.x - center.x
+  const dy = point.y - center.y
+  return {
+    x: dx * Math.cos(radians) - dy * Math.sin(radians),
+    y: dx * Math.sin(radians) + dy * Math.cos(radians),
+  }
+}
+
+const pointInsideExpandedObstacle = (
+  model: FanoutModel,
+  obstacle: RouteObstacle,
+  point: Point,
+  clearance: number,
+) => {
+  const local = rotateIntoObstacleFrame(model, obstacle, point)
+  if (obstacle.shape === "circle") {
+    return (
+      Math.hypot(local.x, local.y) + EPS <
+      Math.max(obstacle.width, obstacle.height) / 2 + clearance
+    )
+  }
+  return (
+    Math.abs(local.x) < obstacle.width / 2 + clearance - EPS &&
+    Math.abs(local.y) < obstacle.height / 2 + clearance - EPS
+  )
+}
+
+/**
+ * Tests a complete trace segment against an expanded SRJ obstacle. The
+ * rectangle test is performed in the obstacle's local frame, so rotated
+ * pads/keepouts are checked continuously rather than by point samples.
+ */
+const segmentIntersectsExpandedObstacle = (
+  model: FanoutModel,
+  obstacle: RouteObstacle,
+  start: Point,
+  end: Point,
+  clearance: number,
+) => {
+  const localStart = rotateIntoObstacleFrame(model, obstacle, start)
+  const localEnd = rotateIntoObstacleFrame(model, obstacle, end)
+  if (obstacle.shape === "circle") {
+    return (
+      pointSegmentDistance({ x: 0, y: 0 }, localStart, localEnd) + EPS <
+      Math.max(obstacle.width, obstacle.height) / 2 + clearance
+    )
+  }
+  const halfWidth = obstacle.width / 2 + clearance
+  const halfHeight = obstacle.height / 2 + clearance
+  if (
+    Math.abs(localStart.x) <= halfWidth + EPS &&
+    Math.abs(localStart.y) <= halfHeight + EPS
+  ) {
+    return true
+  }
+  if (
+    Math.abs(localEnd.x) <= halfWidth + EPS &&
+    Math.abs(localEnd.y) <= halfHeight + EPS
+  ) {
+    return true
+  }
+  const corners = [
+    { x: -halfWidth, y: -halfHeight },
+    { x: halfWidth, y: -halfHeight },
+    { x: halfWidth, y: halfHeight },
+    { x: -halfWidth, y: halfHeight },
+  ]
+  return corners.some(
+    (corner, index) =>
+      segmentDistance(
+        localStart,
+        localEnd,
+        corner,
+        corners[(index + 1) % corners.length]!,
+      ) <= EPS,
+  )
+}
+
+export const isTopPathInsideRoutingBounds = (
+  model: FanoutModel,
+  path: readonly Point[],
+) => {
+  const margin = model.rules.traceWidth / 2
+  return path.every(
+    (point) =>
+      point.x - margin >= model.routingBounds.minX - EPS &&
+      point.x + margin <= model.routingBounds.maxX + EPS &&
+      point.y - margin >= model.routingBounds.minY - EPS &&
+      point.y + margin <= model.routingBounds.maxY + EPS,
+  )
+}
+
 export const isTopPathLegal = ({
   model,
   path,
@@ -326,6 +431,7 @@ export const isTopPathLegal = ({
   powerPads: readonly PowerPlanePad[]
   committedGeometry: readonly PowerPlaneCandidateGeometry[]
 }) => {
+  if (!isTopPathInsideRoutingBounds(model, path)) return false
   const powerPadById = new Map(powerPads.map((pad) => [pad.id, pad]))
   const tracePadDistance =
     model.rules.traceWidth / 2 + model.rules.traceToPadClearance
@@ -335,6 +441,31 @@ export const isTopPathLegal = ({
       if (
         pointSegmentDistance(pad, segment.a, segment.b) + EPS <
         pad.radius + tracePadDistance
+      ) {
+        return false
+      }
+    }
+    for (const rawObstacle of model.input.obstacles) {
+      const obstacle = rawObstacle as RouteObstacle
+      if (!obstacle.layers.includes("top")) continue
+      // The selected BGA pads are represented by model.pads above, which is
+      // necessary so the one source pad can be explicitly ignored.
+      if (obstacle.componentId === model.componentId) continue
+      // Same-net copper is a valid landing/mediation region, not a keepout.
+      if (
+        obstacle.isCopperPour === true &&
+        obstacleMatchesNetKey(obstacle, netKey)
+      ) {
+        continue
+      }
+      if (
+        segmentIntersectsExpandedObstacle(
+          model,
+          obstacle,
+          segment.a,
+          segment.b,
+          model.rules.traceWidth / 2 + model.rules.traceToPadClearance,
+        )
       ) {
         return false
       }
@@ -408,6 +539,29 @@ export const isViaLegal = ({
   ) {
     return false
   }
+  for (const rawObstacle of model.input.obstacles) {
+    const obstacle = rawObstacle as RouteObstacle
+    if (obstacle.layers.length === 0) continue
+    // The selected component's pads are checked above with their actual pad
+    // radii. Never waive that check for same-net pads: via-in-pad is forbidden.
+    if (obstacle.componentId === model.componentId) continue
+    if (
+      obstacle.isCopperPour === true &&
+      obstacleMatchesNetKey(obstacle, netKey)
+    ) {
+      continue
+    }
+    if (
+      pointInsideExpandedObstacle(
+        model,
+        obstacle,
+        via,
+        model.rules.viaDiameter / 2 + model.rules.viaToPadClearance,
+      )
+    ) {
+      return false
+    }
+  }
   if (
     model.previousVias.some(
       (previousVia) =>
@@ -432,9 +586,7 @@ export const isViaLegal = ({
   if (
     model.previousSegments
       .filter(
-        (segment) =>
-          segment.layer === "top" &&
-          segment.connectionName !== powerConnectionName(netKey),
+        (segment) => segment.connectionName !== powerConnectionName(netKey),
       )
       .some(
         (segment) =>
