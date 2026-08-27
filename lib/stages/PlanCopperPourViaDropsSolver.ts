@@ -14,6 +14,8 @@ import {
   type PowerPlaneCandidateGeometry,
 } from "../model/powerPlanePlanning"
 import { Q } from "../model/geometry"
+import { findBoundedLegalViaLineCandidates } from "../model/boundedViaLinePathSearch"
+import { generateOutwardViaLineCandidates } from "../model/viaLineCandidates"
 import type {
   CopperPourViaDrop,
   FanoutModel,
@@ -31,7 +33,17 @@ type DropCandidate = CopperPourViaDrop & {
   geometry: PowerPlaneCandidateGeometry
 }
 
-const SEARCH_NODE_LIMIT = 50_000
+const SEARCH_NODE_LIMIT = 5_000
+
+const isViaInsideRoutingBounds = (model: FanoutModel, via: Point) => {
+  const radius = model.rules.viaDiameter / 2
+  return (
+    via.x - radius >= model.routingBounds.minX &&
+    via.x + radius <= model.routingBounds.maxX &&
+    via.y - radius >= model.routingBounds.minY &&
+    via.y + radius <= model.routingBounds.maxY
+  )
+}
 
 /**
  * Plans one deterministic dogbone/through-via drop for as many disconnected
@@ -88,6 +100,9 @@ export class PlanCopperPourViaDropsSolver extends BaseSolver {
     )
     const candidates: DropCandidate[] = []
     const seen = new Set<string>()
+    const clusterPads = cluster.padIds
+      .map((padId) => this.plan.pads.find((pad) => pad.id === padId))
+      .filter((pad): pad is NonNullable<typeof pad> => Boolean(pad))
     for (const sourcePadId of cluster.padIds) {
       const pad = this.plan.pads.find(
         (candidate) => candidate.id === sourcePadId,
@@ -102,38 +117,42 @@ export class PlanCopperPourViaDropsSolver extends BaseSolver {
           })
         }
       }
-      for (const via of viaSites) {
+      const viaPathCandidates = viaSites.flatMap((via) =>
+        octilinearCandidates(pad, via).map((path) => ({ via, path })),
+      )
+      viaPathCandidates.push(
+        ...generateOutwardViaLineCandidates(this.model, pad, clusterPads),
+      )
+      viaPathCandidates.sort(
+        (first, second) =>
+          pathLength(first.path) - pathLength(second.path) ||
+          first.via.x - second.via.x ||
+          first.via.y - second.via.y ||
+          JSON.stringify(first.path).localeCompare(JSON.stringify(second.path)),
+      )
+      const addLegalCandidate = (via: Point, path: Point[]) => {
         if (
+          !isViaInsideRoutingBounds(this.model, via) ||
           !isViaLegal({
             model: this.model,
             via,
             netKey: cluster.netKey,
             committedGeometry: [],
+          }) ||
+          !isTopPathLegal({
+            model: this.model,
+            path,
+            netKey: cluster.netKey,
+            ignoredPadIds: new Set([pad.id]),
+            powerPads: this.plan.pads,
+            committedGeometry: [],
           })
         ) {
-          continue
+          return
         }
-        const paths = octilinearCandidates(pad, via)
-          .filter((path) =>
-            isTopPathLegal({
-              model: this.model,
-              path,
-              netKey: cluster.netKey,
-              ignoredPadIds: new Set([pad.id]),
-              powerPads: this.plan.pads,
-              committedGeometry: [],
-            }),
-          )
-          .sort(
-            (first, second) =>
-              pathLength(first) - pathLength(second) ||
-              JSON.stringify(first).localeCompare(JSON.stringify(second)),
-          )
         for (const pour of pours) {
           if (!containsPoint(pour, via)) continue
           for (const terminationLayer of [...pour.layers].sort(compareLayers)) {
-            const path = paths[0]
-            if (!path) continue
             const candidateKey = [
               cluster.id,
               pad.id,
@@ -162,8 +181,24 @@ export class PlanCopperPourViaDropsSolver extends BaseSolver {
           }
         }
       }
+      const candidateCountBeforePad = candidates.length
+      for (const { via, path } of viaPathCandidates) {
+        addLegalCandidate(via, path)
+      }
+      if (candidates.length === candidateCountBeforePad) {
+        for (const fallback of findBoundedLegalViaLineCandidates({
+          model: this.model,
+          pad,
+          clusterPads,
+          pours,
+          powerPads: this.plan.pads,
+          netKey: cluster.netKey,
+        })) {
+          addLegalCandidate(fallback.via, fallback.path)
+        }
+      }
     }
-    return candidates.sort(
+    const sortedCandidates = candidates.sort(
       (first, second) =>
         pathLength(first.topPath) - pathLength(second.topPath) ||
         compareLayers(first.terminationLayer, second.terminationLayer) ||
@@ -172,6 +207,13 @@ export class PlanCopperPourViaDropsSolver extends BaseSolver {
         first.sourcePadId.localeCompare(second.sourcePadId) ||
         first.candidateId.localeCompare(second.candidateId),
     )
+    const seenViaSites = new Set<string>()
+    return sortedCandidates.filter((candidate) => {
+      const viaKey = `${Q(candidate.via.x)}:${Q(candidate.via.y)}`
+      if (seenViaSites.has(viaKey)) return false
+      seenViaSites.add(viaKey)
+      return true
+    })
   }
 
   private candidateFits(
@@ -198,7 +240,11 @@ export class PlanCopperPourViaDropsSolver extends BaseSolver {
   }
 
   private assignAndCommit() {
-    const clusters = this.plan.clusters
+    const clusters = [...this.plan.clusters].sort((first, second) => {
+      const firstCount = this.candidatesByCluster.get(first.id)?.length ?? 0
+      const secondCount = this.candidatesByCluster.get(second.id)?.length ?? 0
+      return firstCount - secondCount || first.id.localeCompare(second.id)
+    })
     let best: DropCandidate[] = []
     const selected: DropCandidate[] = []
     const search = (clusterIndex: number) => {

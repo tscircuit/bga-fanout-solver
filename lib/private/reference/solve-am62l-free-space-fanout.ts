@@ -13,8 +13,11 @@ import { squaredDistance } from "./squared-distance"
 import type {
   FanoutModel,
   PowerPlanePlan,
+  PowerSignalCoRoutingSummary,
+  TargetSpacingAdaptationSummary,
   RankedFanoutModel,
 } from "../../model/types"
+import { generateBoundedSignalViaRelocationSites } from "../../model/signalViaRelocationCandidates"
 
 type Point = { x: number; y: number }
 type Segment = { a: Point; b: Point }
@@ -85,7 +88,10 @@ type GeometryModel = {
   previousVias: LayeredVia[]
   earlyRouteCandidates: RoutedNet[][]
   routes: RoutedNet[]
+  routeHints: Map<string, ReferenceRouteSnapshot>
+  selectiveViaLineBlockingSignals: Set<string>
   powerPlanePlan?: PowerPlanePlan
+  targetSpacingAdaptation?: TargetSpacingAdaptationSummary
 }
 
 const EPS = 1e-6
@@ -255,6 +261,14 @@ const miterRightAngleTurns = (
         maximumOffset * 0.25,
         maximumOffset * 0.125,
         maximumOffset * 0.0625,
+        maximumOffset * 0.03125,
+        maximumOffset * 0.015625,
+        maximumOffset * 0.0078125,
+        maximumOffset * 0.00390625,
+        maximumOffset * 0.001953125,
+        maximumOffset * 0.0009765625,
+        maximumOffset * 0.00048828125,
+        maximumOffset * 0.000244140625,
       ].filter((offset) => offset > EPS),
     ).sort(
       (first, second) =>
@@ -560,6 +574,8 @@ const buildModel = (input: SimpleRouteJson): GeometryModel => {
       previousVias: [],
       earlyRouteCandidates: [],
       routes: [],
+      routeHints: new Map(),
+      selectiveViaLineBlockingSignals: new Set(),
     }
   }
 
@@ -791,6 +807,8 @@ const buildModel = (input: SimpleRouteJson): GeometryModel => {
     previousVias,
     earlyRouteCandidates: [],
     routes: [],
+    routeHints: new Map(),
+    selectiveViaLineBlockingSignals: new Set(),
   }
 }
 
@@ -2944,9 +2962,322 @@ const chunkSizes = (count: number) => {
   return sizes
 }
 
+const MAX_SELECTIVE_VIA_CANDIDATES_PER_ROUTE = 32
+const MAX_SELECTIVE_VIA_SEARCH_NODES = 16_384
+
+const placeSelectiveResidualVias = (
+  model: GeometryModel,
+  residual: RoutedNet[],
+) => {
+  if (model.routeHints.size === 0) {
+    return {
+      placed: false,
+      explored: 0,
+      candidateCounts: {},
+      blockingSignalNames: [] as string[],
+    }
+  }
+  const minimumOutwardX = Q(
+    model.padBounds.maxX +
+      model.rules.viaDiameter / 2 +
+      model.rules.viaToPadClearance,
+  )
+  const maximumOutwardX = Q(
+    model.routingBounds.maxX - model.rules.viaDiameter / 2,
+  )
+  const minimumY = Q(model.routingBounds.minY + model.rules.viaDiameter / 2)
+  const maximumY = Q(model.routingBounds.maxY - model.rules.viaDiameter / 2)
+  const stepX = Math.max(model.pitchX / 2, model.rules.viaToViaCenter)
+  const stepY = Math.max(model.pitchY / 2, model.rules.viaToViaCenter)
+  const fixedRoutes = model.routes.filter((route) => route.kind === "early")
+  type Candidate = { route: RoutedNet; addedLength: number; movement: number }
+  const candidatesByName = new Map<string, Candidate[]>()
+  const minimumBlockersByName = new Map<string, string[]>()
+  const reroutedNames = new Set(model.nets.map((net) => net.connectionName))
+  const signalBlockers = (
+    route: RoutedNet,
+    topPath: readonly Point[],
+    via: Point,
+  ) => {
+    const blockers: string[] = []
+    for (const other of model.routeHints.values()) {
+      if (
+        other.connectionName === route.connectionName ||
+        reroutedNames.has(other.connectionName)
+      ) {
+        continue
+      }
+      const pathConflicts = pathSegments(topPath).some(
+        (segment) =>
+          pathSegments(other.topPath).some(
+            (otherSegment) =>
+              segmentDistance(
+                segment.a,
+                segment.b,
+                otherSegment.a,
+                otherSegment.b,
+              ) +
+                EPS <
+              tracePairCenterDistance(model.rules),
+          ) ||
+          pointSegmentDistance(other.via, segment.a, segment.b) + EPS <
+            traceViaCenterDistance(model.rules),
+      )
+      const viaConflicts =
+        distance(via, other.via) + EPS < model.rules.viaToViaCenter ||
+        [...pathSegments(other.topPath), ...pathSegments(other.innerPath)].some(
+          (segment) =>
+            pointSegmentDistance(via, segment.a, segment.b) + EPS <
+            traceViaCenterDistance(model.rules),
+        )
+      if (pathConflicts || viaConflicts) blockers.push(other.connectionName)
+    }
+    return blockers.sort()
+  }
+  const rememberBlockers = (connectionName: string, blockers: string[]) => {
+    if (blockers.length === 0) return
+    const previous = minimumBlockersByName.get(connectionName)
+    if (
+      !previous ||
+      blockers.length < previous.length ||
+      (blockers.length === previous.length &&
+        blockers.join("|").localeCompare(previous.join("|")) < 0)
+    ) {
+      minimumBlockersByName.set(connectionName, blockers)
+    }
+  }
+  for (const route of residual) {
+    const hint = model.routeHints.get(route.connectionName)
+    const portal = route.topPath.at(-1)!
+    const points: Point[] = []
+    const seen = new Set<string>()
+    const addPoint = (point: Point) => {
+      const candidate = { x: Q(point.x), y: Q(point.y) }
+      const key = pointKey(candidate)
+      if (
+        seen.has(key) ||
+        candidate.x < minimumOutwardX - EPS ||
+        candidate.x > maximumOutwardX + EPS ||
+        candidate.y < minimumY - EPS ||
+        candidate.y > maximumY + EPS
+      ) {
+        return
+      }
+      seen.add(key)
+      points.push(candidate)
+    }
+    if (hint) addPoint(hint.via)
+    const xSeeds = [
+      hint?.via.x ?? minimumOutwardX,
+      Math.max(minimumOutwardX, portal.x),
+      minimumOutwardX,
+    ]
+    const ySeeds = [hint?.via.y ?? portal.y, portal.y, route.source.y]
+    for (const xSeed of xSeeds) {
+      for (let xIndex = 0; xIndex <= 8; xIndex++) {
+        const x = Math.max(minimumOutwardX, xSeed) + xIndex * stepX
+        for (const ySeed of ySeeds) {
+          for (let yIndex = 0; yIndex <= 5; yIndex++) {
+            const offset = yIndex === 0 ? 0 : Math.ceil(yIndex / 2) * stepY
+            addPoint({
+              x,
+              y: ySeed + (yIndex % 2 === 0 ? -offset : offset),
+            })
+          }
+        }
+      }
+    }
+    const candidates: Candidate[] = []
+    if (hint) {
+      const hintedRoute: RoutedNet = {
+        ...route,
+        topPath: hint.topPath.map((point) => ({ ...point })),
+        via: { ...hint.via },
+      }
+      if (
+        !topPathIsLegal(
+          model,
+          hintedRoute,
+          hintedRoute.topPath,
+          hintedRoute.via,
+          fixedRoutes,
+        )
+      ) {
+        rememberBlockers(
+          route.connectionName,
+          signalBlockers(route, hintedRoute.topPath, hintedRoute.via),
+        )
+      } else {
+        candidates.push({ route: hintedRoute, addedLength: 0, movement: 0 })
+      }
+    }
+    for (const via of points) {
+      const extensionCandidates = [
+        simplifyPath([portal, { x: via.x, y: portal.y }, via]),
+        ...octilinearCandidates(portal, via),
+      ]
+      for (const extension of extensionCandidates) {
+        const topPath = simplifyPath([...route.topPath, ...extension.slice(1)])
+        const candidateRoute: RoutedNet = {
+          ...route,
+          topPath,
+          via: { ...via },
+        }
+        if (!topPathIsLegal(model, route, topPath, via, fixedRoutes)) {
+          rememberBlockers(
+            route.connectionName,
+            signalBlockers(route, topPath, via),
+          )
+          continue
+        }
+        candidates.push({
+          route: candidateRoute,
+          addedLength: pathSegments(extension).reduce(
+            (sum, segment) => sum + distance(segment.a, segment.b),
+            0,
+          ),
+          movement: hint ? distance(via, hint.via) : distance(via, portal),
+        })
+      }
+    }
+    candidates.sort(
+      (first, second) =>
+        first.movement - second.movement ||
+        first.addedLength - second.addedLength ||
+        first.route.via.x - second.route.via.x ||
+        first.route.via.y - second.route.via.y ||
+        JSON.stringify(first.route.topPath).localeCompare(
+          JSON.stringify(second.route.topPath),
+        ),
+    )
+    const uniqueCandidates = candidates.filter(
+      (candidate, index, all) =>
+        all.findIndex(
+          (other) =>
+            pointKey(other.route.via) === pointKey(candidate.route.via) &&
+            JSON.stringify(other.route.topPath) ===
+              JSON.stringify(candidate.route.topPath),
+        ) === index,
+    )
+    candidatesByName.set(
+      route.connectionName,
+      uniqueCandidates.slice(0, MAX_SELECTIVE_VIA_CANDIDATES_PER_ROUTE),
+    )
+  }
+  const ordered = [...residual].sort(
+    (first, second) =>
+      (candidatesByName.get(first.connectionName)?.length ?? 0) -
+        (candidatesByName.get(second.connectionName)?.length ?? 0) ||
+      compareCanonicalNetOrder(first, second),
+  )
+  const candidateCounts = Object.fromEntries(
+    ordered.map((route) => [
+      route.connectionName,
+      candidatesByName.get(route.connectionName)?.length ?? 0,
+    ]),
+  )
+  if (Object.values(candidateCounts).some((count) => count === 0)) {
+    return {
+      placed: false,
+      explored: 0,
+      candidateCounts,
+      blockingSignalNames: [
+        ...new Set(
+          ordered.flatMap(
+            (route) => minimumBlockersByName.get(route.connectionName) ?? [],
+          ),
+        ),
+      ].sort(),
+    }
+  }
+  let explored = 0
+  let exhausted = false
+  let solution: RoutedNet[] | undefined
+  const viableCandidates = (route: RoutedNet, accepted: RoutedNet[]) =>
+    (candidatesByName.get(route.connectionName) ?? []).filter((candidate) =>
+      topPathIsLegal(
+        model,
+        candidate.route,
+        candidate.route.topPath,
+        candidate.route.via,
+        [...fixedRoutes, ...accepted],
+      ),
+    )
+  const search = (remaining: RoutedNet[], accepted: RoutedNet[]) => {
+    if (solution) return
+    if (++explored > MAX_SELECTIVE_VIA_SEARCH_NODES) {
+      exhausted = true
+      return
+    }
+    if (remaining.length === 0) {
+      solution = accepted
+      return
+    }
+    const rankedRemaining = remaining
+      .map((route) => ({
+        route,
+        candidates: viableCandidates(route, accepted),
+      }))
+      .sort(
+        (first, second) =>
+          first.candidates.length - second.candidates.length ||
+          compareCanonicalNetOrder(first.route, second.route),
+      )
+    const next = rankedRemaining[0]!
+    if (next.candidates.length === 0) return
+    const rest = remaining.filter(
+      (route) => route.connectionName !== next.route.connectionName,
+    )
+    for (const candidate of next.candidates) {
+      const nextAccepted = [...accepted, candidate.route]
+      if (
+        rest.some((route) => viableCandidates(route, nextAccepted).length === 0)
+      ) {
+        continue
+      }
+      search(rest, nextAccepted)
+      if (solution) return
+    }
+  }
+  search(ordered, [])
+  if (!solution) {
+    return {
+      placed: false,
+      explored,
+      exhausted,
+      candidateCounts,
+      blockingSignalNames: [] as string[],
+    }
+  }
+  const byName = new Map(solution.map((route) => [route.connectionName, route]))
+  for (let index = 0; index < model.routes.length; index++) {
+    const replacement = byName.get(model.routes[index]!.connectionName)
+    if (replacement) model.routes[index] = replacement
+  }
+  return {
+    placed: true,
+    explored,
+    exhausted,
+    candidateCounts,
+    blockingSignalNames: [] as string[],
+  }
+}
+
 const buildResidualViaLines = (model: GeometryModel) => {
   const residual = model.routes.filter((route) => route.kind === "residual")
   if (residual.length === 0) return
+  if (model.routeHints.size > 0) {
+    const selective = placeSelectiveResidualVias(model, residual)
+    if (selective.placed) return
+    model.selectiveViaLineBlockingSignals = new Set(
+      selective.blockingSignalNames,
+    )
+    throw phaseError(
+      "build_residual_via_lines",
+      "all",
+      `bounded selective ViaLine search ${selective.exhausted ? "exhausted" : "found no compatible assignment"} after ${selective.explored} nodes; candidates ${JSON.stringify(selective.candidateCounts)}`,
+    )
+  }
 
   // Match the reference ViaLine phase: keep each bus atomic, order its edge
   // portals, and partition it into horizontal strings of two or three vias.
@@ -3346,7 +3677,7 @@ const seededOrders = function* <T>(
   }
 }
 
-const routeInnerLayersSteps = function* (
+const routeInnerLayersAtCurrentTargetsSteps = function* (
   model: GeometryModel,
 ): Generator<ReferenceSearchStep, void> {
   const routedLayers = [
@@ -3666,6 +3997,676 @@ const routeInnerLayersSteps = function* (
         route: snapshotRoutedNet(item.route),
       }
     }
+  }
+}
+
+const minimumDistinctTargetSpacing = (routes: readonly RoutedNet[]) => {
+  const ys = uniqueSorted(routes.map((route) => route.target.y))
+  let minimum = Number.POSITIVE_INFINITY
+  for (let index = 1; index < ys.length; index++) {
+    const spacing = ys[index]! - ys[index - 1]!
+    if (spacing > EPS) minimum = Math.min(minimum, spacing)
+  }
+  return minimum
+}
+
+const innerPathIsLegal = (
+  model: GeometryModel,
+  route: RoutedNet,
+  path: readonly Point[],
+  pathsByName: ReadonlyMap<string, readonly Point[]>,
+) => {
+  if (
+    path.length < 2 ||
+    distance(path[0]!, route.via) > EPS ||
+    distance(path.at(-1)!, route.target) > EPS
+  ) {
+    return false
+  }
+  const segments = pathSegments(path)
+  if (
+    segments.some(
+      (segment) =>
+        !isOctilinear(segment.a, segment.b) ||
+        segment.a.x < model.routingBounds.minX - EPS ||
+        segment.a.x > model.routingBounds.maxX + EPS ||
+        segment.a.y < model.routingBounds.minY - EPS ||
+        segment.a.y > model.routingBounds.maxY + EPS ||
+        segment.b.x < model.routingBounds.minX - EPS ||
+        segment.b.x > model.routingBounds.maxX + EPS ||
+        segment.b.y < model.routingBounds.minY - EPS ||
+        segment.b.y > model.routingBounds.maxY + EPS,
+    )
+  ) {
+    return false
+  }
+  const blockingSegments = [
+    ...model.previousSegments.filter(
+      (segment) =>
+        segment.layer === route.selectedLayer &&
+        segment.connectionName !== route.connectionName,
+    ),
+    ...[...pathsByName.entries()]
+      .filter(
+        ([connectionName]) =>
+          connectionName !== route.connectionName &&
+          model.routes.find((other) => other.connectionName === connectionName)
+            ?.selectedLayer === route.selectedLayer,
+      )
+      .flatMap(([connectionName, otherPath]) =>
+        pathSegments(otherPath).map((segment) => ({
+          ...segment,
+          layer: route.selectedLayer,
+          connectionName,
+        })),
+      ),
+  ]
+  const blockingVias = [
+    ...model.previousVias.filter((via) =>
+      viaTouchesLayer(via, route.selectedLayer, model.input.layerCount),
+    ),
+    ...model.routes
+      .filter((other) => other.connectionName !== route.connectionName)
+      .map((other) => other.via),
+  ]
+  return segments.every(
+    (segment) =>
+      blockingSegments.every(
+        (other) =>
+          segmentDistance(segment.a, segment.b, other.a, other.b) + EPS >=
+          tracePairCenterDistance(model.rules),
+      ) &&
+      blockingVias.every(
+        (via) =>
+          pointSegmentDistance(via, segment.a, segment.b) + EPS >=
+          traceViaCenterDistance(model.rules),
+      ),
+  )
+}
+
+/**
+ * Normalize a selectively repaired inner tail before it is committed. Ordinary
+ * routes are mitered by the later pipeline stage; repaired tails must also prove
+ * that every new right-angle replacement is legal against the frozen geometry,
+ * otherwise the bounded repair search must try its next candidate.
+ */
+const normalizeRepairedInnerPath = (
+  model: GeometryModel,
+  route: RoutedNet,
+  path: readonly Point[],
+  occupiedPaths: ReadonlyMap<string, readonly Point[]>,
+): Point[] | undefined => {
+  const blockingSegments = [
+    ...model.previousSegments.filter(
+      (segment) =>
+        segment.layer === route.selectedLayer &&
+        segment.connectionName !== route.connectionName,
+    ),
+    ...[...occupiedPaths.entries()]
+      .filter(
+        ([connectionName]) =>
+          connectionName !== route.connectionName &&
+          model.routes.find((other) => other.connectionName === connectionName)
+            ?.selectedLayer === route.selectedLayer,
+      )
+      .flatMap(([connectionName, otherPath]) =>
+        pathSegments(otherPath).map((segment) => ({
+          ...segment,
+          layer: route.selectedLayer,
+          connectionName,
+        })),
+      ),
+  ]
+  const blockingVias = [
+    ...model.previousVias.filter((via) =>
+      viaTouchesLayer(via, route.selectedLayer, model.input.layerCount),
+    ),
+    ...model.routes
+      .filter((other) => other.connectionName !== route.connectionName)
+      .map((other) => other.via),
+  ]
+  const normalized = miterRightAngleTurns(
+    path,
+    model.rules,
+    (start, end) =>
+      blockingSegments.every(
+        (segment) =>
+          segmentDistance(start, end, segment.a, segment.b) + EPS >=
+          tracePairCenterDistance(model.rules),
+      ) &&
+      blockingVias.every(
+        (via) =>
+          pointSegmentDistance(via, start, end) + EPS >=
+          traceViaCenterDistance(model.rules),
+      ),
+  )
+  if (
+    normalized.some(
+      (point, index) =>
+        index > 0 &&
+        index < normalized.length - 1 &&
+        isRightAngleTurn(normalized[index - 1]!, point, normalized[index + 1]!),
+    ) ||
+    !innerPathIsLegal(model, route, normalized, occupiedPaths)
+  ) {
+    return undefined
+  }
+  return normalized
+}
+
+const MAX_LOCAL_TARGET_REPAIR_ROUTES = 8
+const MAX_LOCAL_TARGET_REPAIR_ORDERS = 16
+const MAX_LOCAL_TARGET_REPAIR_PIVOTS = 16
+const MAX_LOCAL_TARGET_REPAIR_GRID_EVENTS = 250_000
+const MAX_LOCAL_VIA_RELOCATION_STEPS = 6
+const MAX_LOCAL_VIA_RELOCATION_PIVOTS = 12
+
+const relocateExpandedTargetBlockingVias = (
+  model: GeometryModel,
+  blockingRouteNames: ReadonlySet<string>,
+) => {
+  const relocated: string[] = []
+  for (const connectionName of [...blockingRouteNames].sort()) {
+    const route = model.routes.find(
+      (candidate) => candidate.connectionName === connectionName,
+    )
+    if (!route) continue
+    const step = Math.max(
+      model.rules.viaToViaCenter,
+      traceViaCenterDistance(model.rules),
+    )
+    const sites = generateBoundedSignalViaRelocationSites({
+      origin: route.via,
+      step,
+      maximumSteps: MAX_LOCAL_VIA_RELOCATION_STEPS,
+    })
+    let selected: { via: Point; topPath: Point[] } | undefined
+    for (const via of sites) {
+      const radius = model.rules.viaDiameter / 2
+      if (
+        via.x - radius < model.routingBounds.minX - EPS ||
+        via.x + radius > model.routingBounds.maxX + EPS ||
+        via.y - radius < model.routingBounds.minY - EPS ||
+        via.y + radius > model.routingBounds.maxY + EPS ||
+        padEdgeDistance(model, via) + EPS <
+          radius + model.rules.viaToPadClearance ||
+        model.routes.some(
+          (other) =>
+            other.connectionName !== route.connectionName &&
+            distance(via, other.via) + EPS < model.rules.viaToViaCenter,
+        ) ||
+        model.routes.some(
+          (other) =>
+            other.connectionName !== route.connectionName &&
+            distance(via, other.target) + EPS <
+              traceViaCenterDistance(model.rules),
+        ) ||
+        model.routes.some(
+          (other) =>
+            other.connectionName !== route.connectionName &&
+            pathSegments(other.innerPath).some(
+              (segment) =>
+                pointSegmentDistance(via, segment.a, segment.b) + EPS <
+                traceViaCenterDistance(model.rules),
+            ),
+        )
+      ) {
+        continue
+      }
+      const minimumPivot = Math.max(
+        0,
+        route.topPath.length - MAX_LOCAL_VIA_RELOCATION_PIVOTS,
+      )
+      const pathCandidates: Point[][] = []
+      for (
+        let pivotIndex = route.topPath.length - 2;
+        pivotIndex >= minimumPivot;
+        pivotIndex--
+      ) {
+        const prefix = route.topPath.slice(0, pivotIndex + 1)
+        const pivot = prefix.at(-1)!
+        for (const tail of octilinearCandidates(pivot, via)) {
+          pathCandidates.push(simplifyPath([...prefix, ...tail.slice(1)]))
+        }
+      }
+      const topPath = [
+        ...new Map(
+          pathCandidates.map((path) => [JSON.stringify(path), path]),
+        ).values(),
+      ]
+        .sort(
+          (first, second) =>
+            pathSegments(first).reduce(
+              (sum, segment) => sum + distance(segment.a, segment.b),
+              0,
+            ) -
+              pathSegments(second).reduce(
+                (sum, segment) => sum + distance(segment.a, segment.b),
+                0,
+              ) || JSON.stringify(first).localeCompare(JSON.stringify(second)),
+        )
+        .find((path) =>
+          topPathIsLegal(
+            model,
+            route,
+            path,
+            via,
+            model.routes.filter(
+              (other) => other.connectionName !== route.connectionName,
+            ),
+          ),
+        )
+      if (topPath) {
+        selected = { via, topPath }
+        break
+      }
+    }
+    if (!selected) {
+      throw phaseError(
+        "route_prescribed_inner_layers",
+        route.connectionName,
+        "bounded all-direction signal ViaLine relocation found no legal site",
+      )
+    }
+    route.via = selected.via
+    route.topPath = selected.topPath
+    relocated.push(route.connectionName)
+  }
+  return relocated
+}
+
+const repairExpandedTargetPaths = (
+  model: GeometryModel,
+  actualTargets: ReadonlyMap<string, Point & { layer: string }>,
+) => {
+  for (const route of model.routes) {
+    const target = actualTargets.get(route.connectionName)
+    if (!target) {
+      throw phaseError(
+        "route_prescribed_inner_layers",
+        route.connectionName,
+        "expanded-target adaptation lost the exact fixed target",
+      )
+    }
+    route.target = { ...route.target, ...target }
+  }
+  const candidatePaths = new Map(
+    model.routes.map((route) => [
+      route.connectionName,
+      simplifyPath([...route.innerPath, { ...route.target }]),
+    ]),
+  )
+  const reusableNames = new Set<string>()
+  for (const route of model.routes) {
+    const path = candidatePaths.get(route.connectionName)!
+    if (!innerPathIsLegal(model, route, path, candidatePaths)) continue
+    const normalized = normalizeRepairedInnerPath(
+      model,
+      route,
+      path,
+      candidatePaths,
+    )
+    if (!normalized) continue
+    candidatePaths.set(route.connectionName, normalized)
+    reusableNames.add(route.connectionName)
+  }
+  const initiallyAffected = model.routes.filter(
+    (route) => !reusableNames.has(route.connectionName),
+  )
+  const blockingViaRouteNames = new Set<string>()
+  for (const route of initiallyAffected) {
+    const path = candidatePaths.get(route.connectionName)!
+    for (const other of model.routes) {
+      if (other.connectionName === route.connectionName) continue
+      if (
+        pathSegments(path).some(
+          (segment) =>
+            pointSegmentDistance(other.via, segment.a, segment.b) + EPS <
+            traceViaCenterDistance(model.rules),
+        )
+      ) {
+        blockingViaRouteNames.add(other.connectionName)
+      }
+    }
+  }
+  const relocatedViaRouteNames = relocateExpandedTargetBlockingVias(
+    model,
+    blockingViaRouteNames,
+  )
+  const affectedNames = new Set([
+    ...initiallyAffected.map((route) => route.connectionName),
+    ...relocatedViaRouteNames,
+  ])
+  const affected = model.routes.filter((route) =>
+    affectedNames.has(route.connectionName),
+  )
+  if (affected.length > MAX_LOCAL_TARGET_REPAIR_ROUTES) {
+    throw phaseError(
+      "route_prescribed_inner_layers",
+      "all",
+      `expanded-target local repair needs ${affected.length} routes, above bounded limit ${MAX_LOCAL_TARGET_REPAIR_ROUTES}`,
+    )
+  }
+  const frozenPaths = new Map(
+    [...candidatePaths.entries()].filter(
+      ([name]) => reusableNames.has(name) && !affectedNames.has(name),
+    ),
+  )
+  let repairSearchAttempts = 0
+  const repairedNames: string[] = []
+  const affectedByLayer = new Map<string, RoutedNet[]>()
+  for (const route of affected) {
+    const group = affectedByLayer.get(route.selectedLayer) ?? []
+    group.push(route)
+    affectedByLayer.set(route.selectedLayer, group)
+  }
+  for (const layerRoutes of affectedByLayer.values()) {
+    const canonical = [...layerRoutes].sort(
+      (first, second) =>
+        first.target.y - second.target.y ||
+        compareCanonicalNetOrder(first, second),
+    )
+    const orders = [
+      canonical,
+      [...canonical].reverse(),
+      ...seededOrders(
+        canonical,
+        Math.max(0, MAX_LOCAL_TARGET_REPAIR_ORDERS - 2),
+        0x62a12500 + canonical.length,
+      ),
+    ].slice(0, MAX_LOCAL_TARGET_REPAIR_ORDERS)
+    let layerSolution:
+      | Map<string, { route: RoutedNet; path: Point[] }>
+      | undefined
+    for (const order of orders) {
+      const accepted = new Map<string, { route: RoutedNet; path: Point[] }>()
+      const occupiedPaths = new Map(frozenPaths)
+      for (const route of order) {
+        const pathVariants: Point[][] = []
+        const minimumPivot = Math.max(
+          0,
+          route.innerPath.length - MAX_LOCAL_TARGET_REPAIR_PIVOTS,
+        )
+        for (
+          let pivotIndex = route.innerPath.length - 1;
+          pivotIndex >= minimumPivot;
+          pivotIndex--
+        ) {
+          const prefix = route.innerPath.slice(0, pivotIndex + 1)
+          const pivot = prefix.at(-1)!
+          for (const tail of octilinearCandidates(pivot, route.target)) {
+            pathVariants.push(simplifyPath([...prefix, ...tail.slice(1)]))
+          }
+        }
+        const uniqueVariants = [
+          ...new Map(
+            pathVariants.map((path) => [JSON.stringify(path), path]),
+          ).values(),
+        ].sort(
+          (first, second) =>
+            pathSegments(first).reduce(
+              (sum, segment) => sum + distance(segment.a, segment.b),
+              0,
+            ) -
+              pathSegments(second).reduce(
+                (sum, segment) => sum + distance(segment.a, segment.b),
+                0,
+              ) || JSON.stringify(first).localeCompare(JSON.stringify(second)),
+        )
+        let selected: Point[] | undefined
+        for (const path of uniqueVariants) {
+          repairSearchAttempts++
+          if (!innerPathIsLegal(model, route, path, occupiedPaths)) continue
+          selected = normalizeRepairedInnerPath(
+            model,
+            route,
+            path,
+            occupiedPaths,
+          )
+          if (selected) break
+        }
+        if (!selected) {
+          const step = Math.min(
+            Math.min(model.pitchX, model.pitchY) / 2,
+            tracePairCenterDistance(model.rules),
+          )
+          const regularXs: number[] = []
+          const regularYs: number[] = []
+          for (
+            let x = Q(model.padBounds.minX - step);
+            x <= model.routingBounds.maxX + EPS;
+            x = Q(x + step)
+          ) {
+            regularXs.push(x)
+          }
+          for (
+            let y = Q(model.routingBounds.minY);
+            y <= model.routingBounds.maxY + EPS;
+            y = Q(y + step)
+          ) {
+            regularYs.push(y)
+          }
+          const xs = uniqueSorted([...regularXs, route.via.x, route.target.x])
+          const ys = uniqueSorted([...regularYs, route.via.y, route.target.y])
+          const xIndex = new Map(xs.map((value, index) => [Q(value), index]))
+          const yIndex = new Map(ys.map((value, index) => [Q(value), index]))
+          const startXi = xIndex.get(Q(route.via.x))!
+          const startYi = yIndex.get(Q(route.via.y))!
+          const blockingSegments = [
+            ...model.previousSegments.filter(
+              (segment) =>
+                segment.layer === route.selectedLayer &&
+                segment.connectionName !== route.connectionName,
+            ),
+            ...[...occupiedPaths.entries()]
+              .filter(
+                ([connectionName]) =>
+                  model.routes.find(
+                    (other) => other.connectionName === connectionName,
+                  )?.selectedLayer === route.selectedLayer,
+              )
+              .flatMap(([connectionName, path]) =>
+                pathSegments(path).map((segment) => ({
+                  ...segment,
+                  layer: route.selectedLayer,
+                  connectionName,
+                })),
+              ),
+          ]
+          const blockingVias = [
+            ...model.previousVias.filter((via) =>
+              viaTouchesLayer(via, route.selectedLayer, model.input.layerCount),
+            ),
+            ...model.routes
+              .filter((other) => other.connectionName !== route.connectionName)
+              .map((other) => other.via),
+          ]
+          const gridSearch = findGridPathSteps({
+            xs,
+            ys,
+            starts: [
+              {
+                point: {
+                  x: route.via.x,
+                  y: route.via.y,
+                  xi: startXi,
+                  yi: startYi,
+                },
+                initialCost: 0,
+              },
+            ],
+            isGoal: (point) => distance(point, route.target) <= EPS,
+            pointAllowed: (point) =>
+              point.x >= model.routingBounds.minX - EPS &&
+              point.x <= model.routingBounds.maxX + EPS &&
+              point.y >= model.routingBounds.minY - EPS &&
+              point.y <= model.routingBounds.maxY + EPS &&
+              (distance(point, route.target) <= EPS ||
+                blockingVias.every(
+                  (via) =>
+                    distance(point, via) + EPS >=
+                    traceViaCenterDistance(model.rules),
+                )),
+            segmentAllowed: (a, b) =>
+              blockingVias.every(
+                (via) =>
+                  pointSegmentDistance(via, a, b) + EPS >=
+                  traceViaCenterDistance(model.rules),
+              ) &&
+              blockingSegments.every(
+                (segment) =>
+                  segmentDistance(a, b, segment.a, segment.b) + EPS >=
+                  tracePairCenterDistance(model.rules),
+              ),
+            heuristic: (point) =>
+              Math.abs(route.target.x - point.x) +
+              Math.abs(route.target.y - point.y),
+            visualization: {
+              actionScope: "inner_layer",
+              connectionName: route.connectionName,
+              layer: route.selectedLayer,
+              startPoint: route.via,
+              targetPoint: route.target,
+            },
+          })
+          let gridEvents = 0
+          while (gridEvents < MAX_LOCAL_TARGET_REPAIR_GRID_EVENTS) {
+            const event = gridSearch.next()
+            if (event.done) {
+              if (
+                event.value &&
+                innerPathIsLegal(model, route, event.value, occupiedPaths)
+              ) {
+                selected = normalizeRepairedInnerPath(
+                  model,
+                  route,
+                  event.value,
+                  occupiedPaths,
+                )
+              }
+              break
+            }
+            gridEvents++
+          }
+          repairSearchAttempts += gridEvents
+        }
+        if (!selected) break
+        accepted.set(route.connectionName, { route, path: selected })
+        occupiedPaths.set(route.connectionName, selected)
+      }
+      if (accepted.size === layerRoutes.length) {
+        layerSolution = accepted
+        break
+      }
+    }
+    if (!layerSolution) {
+      throw phaseError(
+        "route_prescribed_inner_layers",
+        canonical.map((route) => route.connectionName).join("/"),
+        `bounded expanded-target local repair exhausted ${repairSearchAttempts} path candidates`,
+      )
+    }
+    for (const { route, path } of layerSolution.values()) {
+      route.innerPath = path
+      frozenPaths.set(route.connectionName, path)
+      repairedNames.push(route.connectionName)
+    }
+  }
+  for (const route of model.routes) {
+    if (
+      reusableNames.has(route.connectionName) &&
+      !affectedNames.has(route.connectionName)
+    ) {
+      route.innerPath = candidatePaths.get(route.connectionName)!
+    }
+  }
+  return {
+    initiallyReusableRouteNames: [...reusableNames].sort(),
+    reusedRouteNames: [...frozenPaths.keys()]
+      .filter((name) => !repairedNames.includes(name))
+      .sort(),
+    repairedRouteNames: initiallyAffected
+      .map((route) => route.connectionName)
+      .sort(),
+    relocatedViaRouteNames,
+    repairSearchAttempts,
+  }
+}
+
+const routeInnerLayersSteps = function* (
+  model: GeometryModel,
+): Generator<ReferenceSearchStep, void> {
+  const actualSpacing = minimumDistinctTargetSpacing(model.routes)
+  const compactSpacing =
+    model.rules.viaDiameter / 2 +
+    model.rules.traceWidth +
+    model.rules.traceClearance
+  const expandable =
+    Number.isFinite(actualSpacing) &&
+    actualSpacing > compactSpacing + EPS &&
+    model.routes.every((route) => route.selectedLayer !== "top")
+  if (!expandable) {
+    yield* routeInnerLayersAtCurrentTargetsSteps(model)
+    return
+  }
+
+  const actualTargets = new Map(
+    model.routes.map((route) => [route.connectionName, { ...route.target }]),
+  )
+  const ys = model.routes.map((route) => route.target.y)
+  const centerY = (Math.min(...ys) + Math.max(...ys)) / 2
+  const compression = compactSpacing / actualSpacing
+  for (const route of model.routes) {
+    route.target = {
+      ...route.target,
+      y: Q(centerY + (route.target.y - centerY) * compression),
+    }
+  }
+
+  try {
+    // The compact reference solve is known-feasible but emits very detailed
+    // neighbor telemetry. Batch those events so expanded rails cannot consume
+    // the parent pipeline's iteration budget before local tail repair begins.
+    const compactSolver = routeInnerLayersAtCurrentTargetsSteps(model)
+    let internalEvents = 0
+    while (true) {
+      const event = compactSolver.next()
+      if (event.done) break
+      internalEvents++
+      if (internalEvents % 128 === 0) {
+        yield {
+          ...event.value,
+          action: "route_compact_target_reference",
+          processed: internalEvents,
+        }
+      }
+    }
+  } catch (error) {
+    for (const route of model.routes) {
+      route.target = {
+        ...route.target,
+        ...actualTargets.get(route.connectionName)!,
+      }
+    }
+    throw error
+  }
+
+  const repaired = repairExpandedTargetPaths(model, actualTargets)
+  model.targetSpacingAdaptation = {
+    applied: true,
+    actualSpacing: Q(actualSpacing),
+    compactSpacing: Q(compactSpacing),
+    scale: Q(actualSpacing / compactSpacing),
+    requiredSignalCount: model.routes.length,
+    ...repaired,
+  }
+  yield {
+    action: "commit_expanded_target_local_repairs",
+    status: "completed",
+    processed:
+      repaired.reusedRouteNames.length + repaired.repairedRouteNames.length,
+    total: model.routes.length,
+    reason: `${repaired.reusedRouteNames.length} reused; ${repaired.repairedRouteNames.length} locally repaired`,
   }
 }
 
@@ -4083,6 +5084,12 @@ export type ReferenceRouteSnapshot = {
   kind: "early" | "residual"
 }
 
+export type TemporaryPowerReservation = {
+  path: Point[]
+  via: Point
+  netKey: string
+}
+
 /**
  * Stateful access to the validated reference algorithm. Every method mutates
  * the same geometry model, so public preprocessing and routing are one honest
@@ -4097,6 +5104,9 @@ export class IncrementalReferenceFanoutSession {
     null
   private lastSearchStep: ReferenceSearchStep | null = null
   private miterCursor = 0
+  private temporaryReservationSegmentCount = 0
+  private temporaryReservationViaCount = 0
+  private powerSignalCoRouting: PowerSignalCoRoutingSummary | undefined
 
   constructor(rankedModel: RankedFanoutModel) {
     this.model = {
@@ -4105,6 +5115,8 @@ export class IncrementalReferenceFanoutSession {
       freeRegions: rankedModel.freeRegions,
       earlyRouteCandidates: [],
       routes: [],
+      routeHints: new Map(),
+      selectiveViaLineBlockingSignals: new Set(),
     }
   }
 
@@ -4165,6 +5177,19 @@ export class IncrementalReferenceFanoutSession {
     assignPreferredLayers(this.model)
   }
 
+  setRouteHints(routes: readonly ReferenceRouteSnapshot[]) {
+    if (this.model.routes.length > 0) {
+      throw new Error("route hints must be set before routing starts")
+    }
+    this.model.routeHints = new Map(
+      routes.map((route) => [route.connectionName, structuredClone(route)]),
+    )
+  }
+
+  getSelectiveViaLineBlockingSignals() {
+    return [...this.model.selectiveViaLineBlockingSignals].sort()
+  }
+
   routePrescribedLayers() {
     routeInnerLayers(this.model)
   }
@@ -4179,6 +5204,108 @@ export class IncrementalReferenceFanoutSession {
 
   validate() {
     validateGeometry(this.model)
+  }
+
+  /**
+   * Installs a complete set of already-routed snapshots into a fresh session.
+   * This is used to revalidate a bounded selective reroute together with the
+   * preserved routes it did not disturb.
+   */
+  replaceRoutesWithSnapshots(routes: readonly ReferenceRouteSnapshot[]) {
+    if (
+      this.earlyDropGenerator ||
+      this.topRouteGenerator ||
+      this.innerRouteGenerator
+    ) {
+      throw new Error("cannot replace routes after routing has started")
+    }
+    const snapshotByName = new Map(
+      routes.map((route) => [route.connectionName, route]),
+    )
+    if (
+      snapshotByName.size !== routes.length ||
+      snapshotByName.size !== this.model.nets.length
+    ) {
+      throw new Error(
+        `replacement route count ${snapshotByName.size} does not match ${this.model.nets.length} required nets`,
+      )
+    }
+    this.model.routes = this.model.nets.map((net) => {
+      const route = snapshotByName.get(net.connectionName)
+      if (!route) {
+        throw new Error(`replacement route is missing ${net.connectionName}`)
+      }
+      return {
+        ...net,
+        selectedLayer: route.selectedLayer,
+        topPath: route.topPath.map((point) => ({ ...point })),
+        via: { ...route.via },
+        innerPath: route.innerPath.map((point) => ({ ...point })),
+        kind: route.kind,
+      }
+    })
+    this.miterCursor = this.model.routes.length
+  }
+
+  reserveTemporaryPowerCorridors(
+    reservations: readonly TemporaryPowerReservation[],
+  ) {
+    if (
+      this.temporaryReservationSegmentCount !== 0 ||
+      this.temporaryReservationViaCount !== 0
+    ) {
+      throw new Error("temporary power corridors are already reserved")
+    }
+    for (const reservation of reservations) {
+      for (const segment of pathSegments(reservation.path)) {
+        this.model.previousSegments.push({
+          ...segment,
+          layer: "top",
+          connectionName: `power-reservation:${reservation.netKey}`,
+        })
+        this.temporaryReservationSegmentCount++
+      }
+      this.model.previousVias.push({
+        ...reservation.via,
+        fromLayer: "top",
+        toLayer: "bottom",
+      })
+      this.temporaryReservationViaCount++
+    }
+  }
+
+  clearTemporaryPowerCorridors() {
+    if (this.temporaryReservationSegmentCount > 0) {
+      this.model.previousSegments.splice(
+        this.model.previousSegments.length -
+          this.temporaryReservationSegmentCount,
+        this.temporaryReservationSegmentCount,
+      )
+    }
+    if (this.temporaryReservationViaCount > 0) {
+      this.model.previousVias.splice(
+        this.model.previousVias.length - this.temporaryReservationViaCount,
+        this.temporaryReservationViaCount,
+      )
+    }
+    this.temporaryReservationSegmentCount = 0
+    this.temporaryReservationViaCount = 0
+  }
+
+  setPowerSignalCoRoutingSummary(summary: PowerSignalCoRoutingSummary) {
+    this.powerSignalCoRouting = structuredClone(summary)
+  }
+
+  getPowerSignalCoRoutingSummary() {
+    return this.powerSignalCoRouting
+      ? structuredClone(this.powerSignalCoRouting)
+      : undefined
+  }
+
+  getTargetSpacingAdaptationSummary() {
+    return this.model.targetSpacingAdaptation
+      ? structuredClone(this.model.targetSpacingAdaptation)
+      : undefined
   }
 
   buildOutput(): InProcessAutorouterResult {

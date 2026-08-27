@@ -630,6 +630,9 @@ export class BuildReferenceOutputSolver extends BaseSolver {
     const powerTraces = (result.outputSimpleRouteJson.traces ?? []).filter(
       (trace) => trace.pcb_trace_id.startsWith(powerTraceIdPrefix),
     )
+    const powerSignalCoRouting = this.session.getPowerSignalCoRoutingSummary()
+    const targetSpacingAdaptation =
+      this.session.getTargetSpacingAdaptationSummary()
     this.output = {
       ...result,
       phases: [...AM62L_FREE_SPACE_FANOUT_PHASES],
@@ -639,12 +642,16 @@ export class BuildReferenceOutputSolver extends BaseSolver {
             powerTraces,
           }
         : {}),
+      ...(powerSignalCoRouting ? { powerSignalCoRouting } : {}),
+      ...(targetSpacingAdaptation ? { targetSpacingAdaptation } : {}),
     }
     this.stats = {
       action: "build_output",
       status: "completed",
       traces: result.traces.length,
       powerTraces: powerTraces.length,
+      coRoutedSignals: powerSignalCoRouting?.reroutedSignalNames.length ?? 0,
+      adaptedTargetSignals: targetSpacingAdaptation?.requiredSignalCount ?? 0,
     }
     this.solved = true
   }

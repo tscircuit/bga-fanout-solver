@@ -159,6 +159,68 @@ export type FixedTargetBgaFanoutOutput = {
   traces: SimplifiedPcbTrace[]
   outputSimpleRouteJson: SimpleRouteJson
   phases: string[]
+  targetSpacingAdaptation?: TargetSpacingAdaptationSummary
   powerPlanePlan?: PowerPlanePlan
   powerTraces?: SimplifiedPcbTrace[]
+  powerSignalCoRouting?: PowerSignalCoRoutingSummary
+}
+
+export type TargetSpacingAdaptationSummary = {
+  applied: boolean
+  actualSpacing: number
+  compactSpacing: number
+  scale: number
+  requiredSignalCount: number
+  initiallyReusableRouteNames: string[]
+  reusedRouteNames: string[]
+  repairedRouteNames: string[]
+  relocatedViaRouteNames: string[]
+  repairSearchAttempts: number
+}
+
+export type PowerSignalRouteChange = {
+  connectionName: string
+  previousLayer: string
+  selectedLayer: string
+  previousLength: number
+  routedLength: number
+}
+
+export type PowerSignalCoRoutingFailure = {
+  planIndex: number
+  affectedSignalNames: string[]
+  reason: string
+}
+
+export type PowerSignalCoRoutingScore = {
+  requiredSignalCount: number
+  routedSignalCount: number
+  physicallyValid: boolean
+  coveredPowerPadCount: number
+  reroutedSignalCount: number
+  addedSignalLength: number
+  addedPowerLength: number
+  powerBendCount: number
+}
+
+export type PowerSignalCoRoutingSummary = {
+  status:
+    | "not_needed"
+    | "no_reservation_plan"
+    | "baseline_retained"
+    | "improved"
+  generatedPlans: number
+  attemptedPlans: number
+  applied: boolean
+  baselineScore: PowerSignalCoRoutingScore
+  selectedScore: PowerSignalCoRoutingScore
+  unresolvedViaDrops: UnresolvedCopperPourViaDrop[]
+  failures: PowerSignalCoRoutingFailure[]
+  affectedSignalNames: string[]
+  reroutedSignalNames: string[]
+  routeChanges: PowerSignalRouteChange[]
+  reservedCorridorCount: number
+  addedSignalLength: number
+  addedPowerLength: number
+  powerBendCount: number
 }
