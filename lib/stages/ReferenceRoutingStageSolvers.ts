@@ -501,8 +501,38 @@ export class PlaceIndependentEarlyDropViasSolver extends IncrementalReferenceSea
 }
 
 export class CompleteTopLayerRoutesSolver extends IncrementalReferenceSearchSolver {
+  static getViaLineDepthRank(groupIndex: number, groupCount: number): number {
+    if (groupIndex < 0 || groupIndex >= groupCount) {
+      throw new Error(
+        `ViaLine group index ${groupIndex} is outside group count ${groupCount}`,
+      )
+    }
+    const symmetricRank = Math.min(groupIndex, groupCount - 1 - groupIndex)
+    const maximumSymmetricRank = Math.floor((groupCount - 1) / 2)
+    const centeredOffset = Math.floor(
+      (groupCount - 1 - maximumSymmetricRank) / 2,
+    )
+    return symmetricRank + centeredOffset
+  }
+
+  static getViaLineVerticalDirection(groupY: number, middleY: number): -1 | 1 {
+    return groupY < middleY ? -1 : 1
+  }
+
+  static getViaLineSlotIndex(
+    slotIndex: number,
+    slotCount: number,
+    verticalDirection: -1 | 1,
+  ): number {
+    return verticalDirection < 0 ? slotIndex : slotCount - 1 - slotIndex
+  }
+
   protected override advanceSearch() {
-    return this.session.stepResidualTopDogbones()
+    return this.session.stepResidualTopDogbones(
+      CompleteTopLayerRoutesSolver.getViaLineDepthRank,
+      CompleteTopLayerRoutesSolver.getViaLineVerticalDirection,
+      CompleteTopLayerRoutesSolver.getViaLineSlotIndex,
+    )
   }
 }
 
