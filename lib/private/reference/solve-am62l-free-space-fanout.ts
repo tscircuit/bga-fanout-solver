@@ -1958,8 +1958,27 @@ const findGridPathSteps = function* ({
   return simplifyPath(reverse.reverse())
 }
 
+export type ViaLineDepthRanker = (
+  groupIndex: number,
+  groupCount: number,
+) => number
+
+export type ViaLineVerticalDirectionSelector = (
+  groupY: number,
+  middleY: number,
+) => -1 | 1
+
+export type ViaLineSlotIndexer = (
+  slotIndex: number,
+  slotCount: number,
+  verticalDirection: -1 | 1,
+) => number
+
 const routeResidualTopDogbonesSteps = function* (
   model: GeometryModel,
+  getViaLineDepthRank: ViaLineDepthRanker = (groupIndex) => groupIndex,
+  getViaLineVerticalDirection: ViaLineVerticalDirectionSelector = () => -1,
+  getViaLineSlotIndex: ViaLineSlotIndexer = (slotIndex) => slotIndex,
 ): Generator<ReferenceSearchStep, void> {
   let lastViaLineError: unknown
   const acceptCompleteCandidate = (routes: RoutedNet[]) => {
@@ -1973,7 +1992,12 @@ const routeResidualTopDogbonesSteps = function* (
       })),
     }
     try {
-      buildResidualViaLines(trialModel)
+      buildResidualViaLines(
+        trialModel,
+        getViaLineDepthRank,
+        getViaLineVerticalDirection,
+        getViaLineSlotIndex,
+      )
       if (!validateCompletedTopGeometry(trialModel)) return false
       model.routes = trialModel.routes
       return true
@@ -3263,7 +3287,12 @@ const placeSelectiveResidualVias = (
   }
 }
 
-const buildResidualViaLines = (model: GeometryModel) => {
+const buildResidualViaLines = (
+  model: GeometryModel,
+  getViaLineDepthRank: ViaLineDepthRanker,
+  getViaLineVerticalDirection: ViaLineVerticalDirectionSelector,
+  getViaLineSlotIndex: ViaLineSlotIndexer,
+) => {
   const residual = model.routes.filter((route) => route.kind === "residual")
   if (residual.length === 0) return
   if (model.routeHints.size > 0) {
@@ -3319,14 +3348,22 @@ const buildResidualViaLines = (model: GeometryModel) => {
   }
   for (const routes of ungroupedByBus.values()) addBusGroups(routes)
 
+  const verticalPosition = (group: RoutedNet[]) =>
+    Math.min(
+      ...group.map((route) => route.topPath[route.topPath.length - 1]!.y),
+    )
+  const stableKey = (group: RoutedNet[]) =>
+    group
+      .map((route) => route.connectionName)
+      .sort()
+      .join("|")
   groups.sort(
     (first, second) =>
-      Math.min(
-        ...first.map((route) => route.topPath[route.topPath.length - 1]!.y),
-      ) -
-        Math.min(
-          ...second.map((route) => route.topPath[route.topPath.length - 1]!.y),
-        ) || first[0]!.busId.localeCompare(second[0]!.busId),
+      verticalPosition(first) - verticalPosition(second) ||
+      stableKey(first).localeCompare(stableKey(second)),
+  )
+  const viaLineDepthRanks = groups.map((_, groupIndex) =>
+    getViaLineDepthRank(groupIndex, groups.length),
   )
 
   const slotPitch = Math.max(
@@ -3351,12 +3388,31 @@ const buildResidualViaLines = (model: GeometryModel) => {
     model.pitchY / 2,
     traceViaCenterDistance(model.rules),
   )
+  const groupPortalBounds = groups.map((group) => {
+    const portalYs = group.map(
+      (route) => route.topPath[route.topPath.length - 1]!.y,
+    )
+    return {
+      minY: Math.min(...portalYs),
+      maxY: Math.max(...portalYs),
+      centerY: (Math.min(...portalYs) + Math.max(...portalYs)) / 2,
+    }
+  })
+  const portalBundleMiddleY =
+    (Math.min(...groupPortalBounds.map(({ centerY }) => centerY)) +
+      Math.max(...groupPortalBounds.map(({ centerY }) => centerY))) /
+    2
+  const groupVerticalDirections = groupPortalBounds.map(({ centerY }) =>
+    getViaLineVerticalDirection(centerY, portalBundleMiddleY),
+  )
   const lineYs: number[] = []
-  for (const group of groups) {
+  for (let groupIndex = 0; groupIndex < groups.length; groupIndex++) {
+    const bounds = groupPortalBounds[groupIndex]!
+    const verticalDirection = groupVerticalDirections[groupIndex]!
     const desired =
-      Math.min(
-        ...group.map((route) => route.topPath[route.topPath.length - 1]!.y),
-      ) - lineDrop
+      verticalDirection < 0
+        ? bounds.minY - lineDrop
+        : bounds.maxY + lineDrop
     lineYs.push(
       Q(
         lineYs.length === 0
@@ -3394,7 +3450,7 @@ const buildResidualViaLines = (model: GeometryModel) => {
     ...groups.map(
       (group, groupIndex) =>
         firstLineX +
-        groupIndex * lineStride +
+        viaLineDepthRanks[groupIndex]! * lineStride +
         (group.length - 1) * slotPitch +
         model.rules.viaDiameter / 2,
     ),
@@ -3415,10 +3471,18 @@ const buildResidualViaLines = (model: GeometryModel) => {
     )
   }
   groups.forEach((group, groupIndex) => {
-    const lineX = Q(firstLineX + groupIndex * lineStride)
+    const lineX = Q(
+      firstLineX + viaLineDepthRanks[groupIndex]! * lineStride,
+    )
+    const verticalDirection = groupVerticalDirections[groupIndex]!
     group.forEach((route, slotIndex) => {
+      const mirroredSlotIndex = getViaLineSlotIndex(
+        slotIndex,
+        group.length,
+        verticalDirection,
+      )
       const via = {
-        x: Q(lineX + slotIndex * slotPitch),
+        x: Q(lineX + mirroredSlotIndex * slotPitch),
         y: lineYs[groupIndex]!,
       }
       if (
@@ -3468,32 +3532,28 @@ const buildResidualViaLines = (model: GeometryModel) => {
   for (const group of groups) {
     for (const route of group) {
       const portal = route.topPath[route.topPath.length - 1]!
-      const referenceExtension = simplifyPath([
-        portal,
-        { x: route.via.x, y: portal.y },
-        route.via,
+      const elbow = { x: route.via.x, y: portal.y }
+      const extension = simplifyPath([portal, elbow, route.via])
+      const completeTopPath = simplifyPath([
+        ...route.topPath,
+        ...extension.slice(1),
       ])
-      const extensionCandidates = [
-        referenceExtension,
-        ...octilinearCandidates(portal, route.via),
-      ]
-      const extension = extensionCandidates.find((candidate) =>
-        topPathIsLegal(
+      if (
+        !topPathIsLegal(
           model,
           route,
-          simplifyPath([...route.topPath, ...candidate.slice(1)]),
+          completeTopPath,
           route.via,
           model.routes.filter((other) => other !== route),
-        ),
-      )
-      if (!extension) {
+        )
+      ) {
         throw phaseError(
           "build_residual_via_lines",
           route.connectionName,
-          "cannot connect the package-edge portal to its ordered ViaLine slot",
+          "deterministic outward-bending connection from the package-edge portal to its ViaLine slot is illegal",
         )
       }
-      route.topPath = simplifyPath([...route.topPath, ...extension.slice(1)])
+      route.topPath = completeTopPath
     }
   }
 }
@@ -5131,8 +5191,17 @@ export class IncrementalReferenceFanoutSession {
     )
   }
 
-  stepResidualTopDogbones(): boolean {
-    this.topRouteGenerator ??= routeResidualTopDogbonesSteps(this.model)
+  stepResidualTopDogbones(
+    getViaLineDepthRank?: ViaLineDepthRanker,
+    getViaLineVerticalDirection?: ViaLineVerticalDirectionSelector,
+    getViaLineSlotIndex?: ViaLineSlotIndexer,
+  ): boolean {
+    this.topRouteGenerator ??= routeResidualTopDogbonesSteps(
+      this.model,
+      getViaLineDepthRank,
+      getViaLineVerticalDirection,
+      getViaLineSlotIndex,
+    )
     return this.advanceSearch(
       this.topRouteGenerator,
       "complete_top_layer_routes",
