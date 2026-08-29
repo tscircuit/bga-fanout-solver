@@ -5,12 +5,8 @@ test("CompleteTopLayerRoutesSolver bends ViaLines away from the middle", () => {
   expect(CompleteTopLayerRoutesSolver.getViaLineVerticalDirection(-1, 0)).toBe(
     -1,
   )
-  expect(CompleteTopLayerRoutesSolver.getViaLineVerticalDirection(0, 0)).toBe(
-    1,
-  )
-  expect(CompleteTopLayerRoutesSolver.getViaLineVerticalDirection(1, 0)).toBe(
-    1,
-  )
+  expect(CompleteTopLayerRoutesSolver.getViaLineVerticalDirection(0, 0)).toBe(1)
+  expect(CompleteTopLayerRoutesSolver.getViaLineVerticalDirection(1, 0)).toBe(1)
   expect(
     [0, 1, 2].map((slotIndex) =>
       CompleteTopLayerRoutesSolver.getViaLineSlotIndex(slotIndex, 3, -1),

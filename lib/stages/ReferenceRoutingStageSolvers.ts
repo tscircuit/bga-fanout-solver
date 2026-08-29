@@ -507,10 +507,7 @@ export class CompleteTopLayerRoutesSolver extends IncrementalReferenceSearchSolv
         `ViaLine group index ${groupIndex} is outside group count ${groupCount}`,
       )
     }
-    const symmetricRank = Math.min(
-      groupIndex,
-      groupCount - 1 - groupIndex,
-    )
+    const symmetricRank = Math.min(groupIndex, groupCount - 1 - groupIndex)
     const maximumSymmetricRank = Math.floor((groupCount - 1) / 2)
     const centeredOffset = Math.floor(
       (groupCount - 1 - maximumSymmetricRank) / 2,
@@ -518,10 +515,7 @@ export class CompleteTopLayerRoutesSolver extends IncrementalReferenceSearchSolv
     return symmetricRank + centeredOffset
   }
 
-  static getViaLineVerticalDirection(
-    groupY: number,
-    middleY: number,
-  ): -1 | 1 {
+  static getViaLineVerticalDirection(groupY: number, middleY: number): -1 | 1 {
     return groupY < middleY ? -1 : 1
   }
 

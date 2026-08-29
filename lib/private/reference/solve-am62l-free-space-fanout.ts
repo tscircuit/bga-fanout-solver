@@ -3410,9 +3410,7 @@ const buildResidualViaLines = (
     const bounds = groupPortalBounds[groupIndex]!
     const verticalDirection = groupVerticalDirections[groupIndex]!
     const desired =
-      verticalDirection < 0
-        ? bounds.minY - lineDrop
-        : bounds.maxY + lineDrop
+      verticalDirection < 0 ? bounds.minY - lineDrop : bounds.maxY + lineDrop
     lineYs.push(
       Q(
         lineYs.length === 0
@@ -3471,9 +3469,7 @@ const buildResidualViaLines = (
     )
   }
   groups.forEach((group, groupIndex) => {
-    const lineX = Q(
-      firstLineX + viaLineDepthRanks[groupIndex]! * lineStride,
-    )
+    const lineX = Q(firstLineX + viaLineDepthRanks[groupIndex]! * lineStride)
     const verticalDirection = groupVerticalDirections[groupIndex]!
     group.forEach((route, slotIndex) => {
       const mirroredSlotIndex = getViaLineSlotIndex(
