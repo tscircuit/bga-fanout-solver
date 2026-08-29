@@ -28,6 +28,7 @@ import {
   PlanSameNetPadClustersSolver,
   type PowerPlanePlanningContext,
 } from "./PlanSameNetPadClustersSolver"
+import { CompleteTopLayerRoutesSolver } from "./ReferenceRoutingStageSolvers"
 
 const MAX_EARLY_ROUTE_STEPS = 1_000_000
 const MAX_TOP_ROUTE_STEPS = 100_000
@@ -350,7 +351,11 @@ export class ResolvePowerSignalConflictsSolver extends BaseSolver {
         session.stepIndependentEarlyDropVias(),
       )
       drain("co-route top signal escape", MAX_TOP_ROUTE_STEPS, () =>
-        session.stepResidualTopDogbones(),
+        session.stepResidualTopDogbones(
+          CompleteTopLayerRoutesSolver.getViaLineDepthRank,
+          CompleteTopLayerRoutesSolver.getViaLineVerticalDirection,
+          CompleteTopLayerRoutesSolver.getViaLineSlotIndex,
+        ),
       )
       session.assignPreferredLayers()
       drain("co-route inner signal escape", MAX_INNER_ROUTE_STEPS, () =>
