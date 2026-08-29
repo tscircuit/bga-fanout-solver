@@ -165,9 +165,15 @@ export class FixedTargetBgaFanoutSolver extends BasePipelineSolver<SimpleRouteJs
       PLAN_SAME_NET_PAD_CLUSTERS,
       PlanSameNetPadClustersSolver,
       (solver: FixedTargetBgaFanoutSolver) => [
-        solver.requireStageOutput<IncrementalReferenceFanoutSession>(
-          VALIDATE_ROUTES,
-        ),
+        {
+          session:
+            solver.requireStageOutput<IncrementalReferenceFanoutSession>(
+              VALIDATE_ROUTES,
+            ),
+          freeCells: solver.requireStageOutput<FreeSpaceSample>(
+            SAMPLE_FREE_SPACE_CELLS,
+          ).legalCells,
+        },
       ],
     ),
     definePipelineStep(

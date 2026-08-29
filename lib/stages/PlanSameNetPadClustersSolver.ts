@@ -11,6 +11,7 @@ import {
 } from "../model/powerPlanePlanning"
 import type {
   FanoutModel,
+  FreeCell,
   PowerPlanePlan,
   SameNetPadCluster,
   SameNetPadLink,
@@ -21,6 +22,12 @@ import { visualizeSameNetPadClusters } from "../visualize/powerPlaneVisuals"
 export type PowerPlanePlanningContext = {
   session: IncrementalReferenceFanoutSession
   model: FanoutModel
+  freeCells: FreeCell[]
+}
+
+type SameNetPadClusterPlanningInput = {
+  session: IncrementalReferenceFanoutSession
+  freeCells: readonly FreeCell[]
 }
 
 type AdjacentCandidate = {
@@ -64,7 +71,9 @@ class DisjointSet {
  * to every other member.
  */
 export class PlanSameNetPadClustersSolver extends BaseSolver {
+  private readonly session: IncrementalReferenceFanoutSession
   private readonly model: FanoutModel
+  private readonly freeCells: FreeCell[]
   private output: FanoutModel | null = null
   private plan: PowerPlanePlan | null = null
   private readonly candidates: AdjacentCandidate[]
@@ -73,9 +82,14 @@ export class PlanSameNetPadClustersSolver extends BaseSolver {
   private readonly committedGeometry: PowerPlaneCandidateGeometry[] = []
   private cursor = 0
 
-  constructor(private readonly session: IncrementalReferenceFanoutSession) {
+  constructor(private readonly input: SameNetPadClusterPlanningInput) {
     super()
-    const signalModel = session.getVisualizationContext().model
+    this.session = input.session
+    const { freeCells } = input
+    const session = input.session
+    const visualizationContext = session.getVisualizationContext()
+    const signalModel = visualizationContext.model
+    this.freeCells = freeCells.map((cell) => ({ ...cell }))
     const signalRoutes = session.getRoutes()
     this.model = {
       ...signalModel,
@@ -156,7 +170,7 @@ export class PlanSameNetPadClustersSolver extends BaseSolver {
   }
 
   override getConstructorParams() {
-    return [this.session]
+    return [this.input]
   }
 
   override _setup() {
@@ -306,7 +320,11 @@ export class PlanSameNetPadClustersSolver extends BaseSolver {
         "PlanSameNetPadClustersSolver output requested before completion",
       )
     }
-    return { session: this.session, model: this.output }
+    return {
+      session: this.session,
+      model: this.output,
+      freeCells: this.freeCells,
+    }
   }
 
   override visualize(): GraphicsObject {
