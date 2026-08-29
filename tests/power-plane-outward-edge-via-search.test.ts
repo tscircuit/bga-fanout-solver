@@ -5,8 +5,9 @@ import { FixedTargetBgaFanoutSolver } from "../lib"
 import { buildFanoutModel } from "../lib/model/buildFanoutModel"
 import { distance } from "../lib/model/geometry"
 import { pointSegmentDistance } from "../lib/model/powerPlanePlanning"
+import type { FreeSpaceSample } from "../lib/model/types"
 
-test("outward edge dogbones improve captured AM62L and RAM power-pad plane coverage without disturbing signals", () => {
+test("free-space and outward dogbones cover captured AM62L and RAM power pads without disturbing signals", () => {
   for (const [
     fixtureName,
     fixture,
@@ -27,23 +28,19 @@ test("outward edge dogbones improve captured AM62L and RAM power-pad plane cover
       "LPDDR4",
       simplifiedAm62lDdrRamReproFixedLayerDistribution,
       58,
-      28,
-      44,
+      30,
+      48,
       [
         "pcb_smtpad_380",
         "pcb_smtpad_393",
-        "pcb_smtpad_397",
         "pcb_smtpad_398",
         "pcb_smtpad_402",
         "pcb_smtpad_404",
-        "pcb_smtpad_406",
         "pcb_smtpad_409",
         "pcb_smtpad_411",
-        "pcb_smtpad_417",
         "pcb_smtpad_418",
         "pcb_smtpad_437",
         "pcb_smtpad_438",
-        "pcb_smtpad_469",
       ],
     ],
   ] as const) {
@@ -55,6 +52,9 @@ test("outward edge dogbones improve captured AM62L and RAM power-pad plane cover
     expect(solver.solved, `${fixtureName} solver completion`).toBe(true)
     const output = solver.getOutput()
     const plan = output.powerPlanePlan
+    const freeSpaceSample = solver.getStageOutput<FreeSpaceSample>(
+      "sampleFreeSpaceCells",
+    )!
     expect(plan, `${fixtureName} power-plane plan`).toBeDefined()
     expect(output.traces, `${fixtureName} signal fanout`).toHaveLength(33)
     expect(plan!.pads, `${fixtureName} eligible power pads`).toHaveLength(
@@ -86,6 +86,27 @@ test("outward edge dogbones improve captured AM62L and RAM power-pad plane cover
     expect(output.powerTraces).toHaveLength(
       plan!.links.length + plan!.viaDrops.length,
     )
+    const freeSpaceKeys = new Set(
+      freeSpaceSample.legalCells.map((cell) => `${cell.x}:${cell.y}`),
+    )
+    const freeSpaceDrops = plan!.viaDrops.filter((drop) =>
+      freeSpaceKeys.has(`${drop.via.x}:${drop.via.y}`),
+    )
+    expect(
+      freeSpaceDrops.length,
+      `${fixtureName} uses discovered BGA free space for power vias`,
+    ).toBeGreaterThan(0)
+    const viaRadius = model.rules.viaDiameter / 2
+    expect(
+      freeSpaceDrops.every(
+        (drop) =>
+          drop.via.x - viaRadius >= model.padBounds.minX &&
+          drop.via.x + viaRadius <= model.padBounds.maxX &&
+          drop.via.y - viaRadius >= model.padBounds.minY &&
+          drop.via.y + viaRadius <= model.padBounds.maxY,
+      ),
+      `${fixtureName} selected free-space vias fit fully inside the BGA`,
+    ).toBe(true)
     const generatedVias = [
       ...output.traces,
       ...(output.powerTraces ?? []),

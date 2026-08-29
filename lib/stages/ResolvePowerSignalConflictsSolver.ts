@@ -259,7 +259,10 @@ export class ResolvePowerSignalConflictsSolver extends BaseSolver {
       )
     }
 
-    const clusterSolver = new PlanSameNetPadClustersSolver(combinedSession)
+    const clusterSolver = new PlanSameNetPadClustersSolver({
+      session: combinedSession,
+      freeCells: this.initialContext.freeCells,
+    })
     clusterSolver.solve()
     const context = clusterSolver.getOutput()
     const dropSolver = new PlanCopperPourViaDropsSolver(context)

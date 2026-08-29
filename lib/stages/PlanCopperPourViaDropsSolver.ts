@@ -31,6 +31,7 @@ import type { PowerPlanePlanningContext } from "./PlanSameNetPadClustersSolver"
 type DropCandidate = CopperPourViaDrop & {
   candidateId: string
   geometry: PowerPlaneCandidateGeometry
+  insideBga: boolean
 }
 
 const SEARCH_NODE_LIMIT = 5_000
@@ -42,6 +43,16 @@ const isViaInsideRoutingBounds = (model: FanoutModel, via: Point) => {
     via.x + radius <= model.routingBounds.maxX &&
     via.y - radius >= model.routingBounds.minY &&
     via.y + radius <= model.routingBounds.maxY
+  )
+}
+
+const isViaInsideBga = (model: FanoutModel, via: Point) => {
+  const radius = model.rules.viaDiameter / 2
+  return (
+    via.x - radius >= model.padBounds.minX &&
+    via.x + radius <= model.padBounds.maxX &&
+    via.y - radius >= model.padBounds.minY &&
+    via.y + radius <= model.padBounds.maxY
   )
 }
 
@@ -100,6 +111,9 @@ export class PlanCopperPourViaDropsSolver extends BaseSolver {
     )
     const candidates: DropCandidate[] = []
     const seen = new Set<string>()
+    const freeSpaceViaSites = this.context.freeCells.filter((via) =>
+      pours.some((pour) => containsPoint(pour, via)),
+    )
     const clusterPads = cluster.padIds
       .map((padId) => this.plan.pads.find((pad) => pad.id === padId))
       .filter((pad): pad is NonNullable<typeof pad> => Boolean(pad))
@@ -117,20 +131,40 @@ export class PlanCopperPourViaDropsSolver extends BaseSolver {
           })
         }
       }
-      const viaPathCandidates = viaSites.flatMap((via) =>
-        octilinearCandidates(pad, via).map((path) => ({ via, path })),
-      )
+      const viaPathCandidates = [
+        ...freeSpaceViaSites.flatMap((via) =>
+          octilinearCandidates(pad, via).map((path) => ({
+            via,
+            path,
+            insideBga: isViaInsideBga(this.model, via),
+          })),
+        ),
+        ...viaSites.flatMap((via) =>
+          octilinearCandidates(pad, via).map((path) => ({
+            via,
+            path,
+            insideBga: isViaInsideBga(this.model, via),
+          })),
+        ),
+      ]
       viaPathCandidates.push(
-        ...generateOutwardViaLineCandidates(this.model, pad, clusterPads),
+        ...generateOutwardViaLineCandidates(this.model, pad, clusterPads).map(
+          ({ via, path }) => ({ via, path, insideBga: false }),
+        ),
       )
       viaPathCandidates.sort(
         (first, second) =>
+          Number(second.insideBga) - Number(first.insideBga) ||
           pathLength(first.path) - pathLength(second.path) ||
           first.via.x - second.via.x ||
           first.via.y - second.via.y ||
           JSON.stringify(first.path).localeCompare(JSON.stringify(second.path)),
       )
-      const addLegalCandidate = (via: Point, path: Point[]) => {
+      const addLegalCandidate = (
+        via: Point,
+        path: Point[],
+        insideBga = isViaInsideBga(this.model, via),
+      ) => {
         if (
           !isViaInsideRoutingBounds(this.model, via) ||
           !isViaLegal({
@@ -177,13 +211,14 @@ export class PlanCopperPourViaDropsSolver extends BaseSolver {
               ...drop,
               candidateId: candidateKey,
               geometry: { path, via, netKey: cluster.netKey },
+              insideBga,
             })
           }
         }
       }
       const candidateCountBeforePad = candidates.length
-      for (const { via, path } of viaPathCandidates) {
-        addLegalCandidate(via, path)
+      for (const { via, path, insideBga } of viaPathCandidates) {
+        addLegalCandidate(via, path, insideBga)
       }
       if (candidates.length === candidateCountBeforePad) {
         for (const fallback of findBoundedLegalViaLineCandidates({
@@ -200,6 +235,7 @@ export class PlanCopperPourViaDropsSolver extends BaseSolver {
     }
     const sortedCandidates = candidates.sort(
       (first, second) =>
+        Number(second.insideBga) - Number(first.insideBga) ||
         pathLength(first.topPath) - pathLength(second.topPath) ||
         compareLayers(first.terminationLayer, second.terminationLayer) ||
         first.via.x - second.via.x ||
@@ -280,7 +316,7 @@ export class PlanCopperPourViaDropsSolver extends BaseSolver {
     const drops = clusters
       .map((cluster) => selectedByCluster.get(cluster.id))
       .filter((drop): drop is DropCandidate => Boolean(drop))
-      .map(({ candidateId: _, geometry: __, ...drop }) => drop)
+      .map(({ candidateId: _, geometry: __, insideBga: ___, ...drop }) => drop)
     const unresolved: UnresolvedCopperPourViaDrop[] = clusters
       .filter((cluster) => !selectedByCluster.has(cluster.id))
       .map((cluster) => {
@@ -357,6 +393,10 @@ export class PlanCopperPourViaDropsSolver extends BaseSolver {
         this.plan.clusters.length,
       ),
       legalViaCandidates: candidateCount,
+      freeSpaceCells: this.context.freeCells.length,
+      internalViaDrops: this.plan.viaDrops.filter((drop) =>
+        isViaInsideBga(this.model, drop.via),
+      ).length,
       droppedClusters: this.plan.viaDrops.length,
       skippedClusters: this.plan.unresolvedViaDrops.length,
       unresolved: this.plan.unresolvedViaDrops.map((item) => ({
