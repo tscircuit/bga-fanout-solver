@@ -2992,6 +2992,7 @@ const MAX_SELECTIVE_VIA_SEARCH_NODES = 16_384
 const placeSelectiveResidualVias = (
   model: GeometryModel,
   residual: RoutedNet[],
+  getViaLineVerticalDirection: ViaLineVerticalDirectionSelector,
 ) => {
   if (model.routeHints.size === 0) {
     return {
@@ -3014,6 +3015,9 @@ const placeSelectiveResidualVias = (
   const stepX = Math.max(model.pitchX / 2, model.rules.viaToViaCenter)
   const stepY = Math.max(model.pitchY / 2, model.rules.viaToViaCenter)
   const fixedRoutes = model.routes.filter((route) => route.kind === "early")
+  const portalYs = residual.map((route) => route.topPath.at(-1)!.y)
+  const portalBundleMiddleY =
+    (Math.min(...portalYs) + Math.max(...portalYs)) / 2
   type Candidate = { route: RoutedNet; addedLength: number; movement: number }
   const candidatesByName = new Map<string, Candidate[]>()
   const minimumBlockersByName = new Map<string, string[]>()
@@ -3073,6 +3077,10 @@ const placeSelectiveResidualVias = (
   for (const route of residual) {
     const hint = model.routeHints.get(route.connectionName)
     const portal = route.topPath.at(-1)!
+    const verticalDirection = getViaLineVerticalDirection(
+      portal.y,
+      portalBundleMiddleY,
+    )
     const points: Point[] = []
     const seen = new Set<string>()
     const addPoint = (point: Point) => {
@@ -3083,7 +3091,8 @@ const placeSelectiveResidualVias = (
         candidate.x < minimumOutwardX - EPS ||
         candidate.x > maximumOutwardX + EPS ||
         candidate.y < minimumY - EPS ||
-        candidate.y > maximumY + EPS
+        candidate.y > maximumY + EPS ||
+        verticalDirection * (candidate.y - portal.y) < -EPS
       ) {
         return
       }
@@ -3136,33 +3145,28 @@ const placeSelectiveResidualVias = (
       }
     }
     for (const via of points) {
-      const extensionCandidates = [
-        simplifyPath([portal, { x: via.x, y: portal.y }, via]),
-        ...octilinearCandidates(portal, via),
-      ]
-      for (const extension of extensionCandidates) {
-        const topPath = simplifyPath([...route.topPath, ...extension.slice(1)])
-        const candidateRoute: RoutedNet = {
-          ...route,
-          topPath,
-          via: { ...via },
-        }
-        if (!topPathIsLegal(model, route, topPath, via, fixedRoutes)) {
-          rememberBlockers(
-            route.connectionName,
-            signalBlockers(route, topPath, via),
-          )
-          continue
-        }
-        candidates.push({
-          route: candidateRoute,
-          addedLength: pathSegments(extension).reduce(
-            (sum, segment) => sum + distance(segment.a, segment.b),
-            0,
-          ),
-          movement: hint ? distance(via, hint.via) : distance(via, portal),
-        })
+      const extension = simplifyPath([portal, { x: via.x, y: portal.y }, via])
+      const topPath = simplifyPath([...route.topPath, ...extension.slice(1)])
+      const candidateRoute: RoutedNet = {
+        ...route,
+        topPath,
+        via: { ...via },
       }
+      if (!topPathIsLegal(model, route, topPath, via, fixedRoutes)) {
+        rememberBlockers(
+          route.connectionName,
+          signalBlockers(route, topPath, via),
+        )
+        continue
+      }
+      candidates.push({
+        route: candidateRoute,
+        addedLength: pathSegments(extension).reduce(
+          (sum, segment) => sum + distance(segment.a, segment.b),
+          0,
+        ),
+        movement: hint ? distance(via, hint.via) : distance(via, portal),
+      })
     }
     candidates.sort(
       (first, second) =>
@@ -3296,7 +3300,11 @@ const buildResidualViaLines = (
   const residual = model.routes.filter((route) => route.kind === "residual")
   if (residual.length === 0) return
   if (model.routeHints.size > 0) {
-    const selective = placeSelectiveResidualVias(model, residual)
+    const selective = placeSelectiveResidualVias(
+      model,
+      residual,
+      getViaLineVerticalDirection,
+    )
     if (selective.placed) return
     model.selectiveViaLineBlockingSignals = new Set(
       selective.blockingSignalNames,
